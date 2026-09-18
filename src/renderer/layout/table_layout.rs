@@ -12030,62 +12030,31 @@ impl LayoutEngine {
             == 1
     }
 
-    /// True when a first cut would finish some sibling cells while leaving a
-    /// tall remainder in others — continuation would paint empty left columns.
-    pub(crate) fn row_cut_leaves_asymmetric_empty_siblings(
+    /// Short category/item label — safe to re-paint on an otherwise empty
+    /// continuation fragment instead of leaving a blank band.
+    pub(crate) fn cell_is_short_repeatable_label(
         &self,
+        cell: &crate::model::table::Cell,
         table: &crate::model::table::Table,
-        row: usize,
-        start_cut: &[usize],
-        end_cut: &[usize],
-        min_remaining_px: f64,
         styles: &ResolvedStyleSet,
     ) -> bool {
-        let mut row_cells: Vec<&crate::model::table::Cell> = table
-            .cells
-            .iter()
-            .filter(|cell| cell.row as usize == row && cell.row_span == 1)
-            .collect();
-        row_cells.sort_by_key(|cell| cell.col);
-        if row_cells.len() < 2 {
-            return false;
-        }
-
-        let mut finished = 0usize;
-        let mut continuing = 0usize;
-        let mut remaining_height = 0.0f64;
-        for (cell_idx, cell) in row_cells.iter().enumerate() {
-            let units = self.cell_units(cell, table, styles);
-            let start = start_cut
-                .get(cell_idx)
-                .copied()
-                .unwrap_or(0)
-                .min(units.len());
-            let end = end_cut
-                .get(cell_idx)
-                .copied()
-                .unwrap_or(start)
-                .min(units.len());
-            let visible = |unit: &CellUnit| !unit.empty_spacer && unit.vis_start < unit.vis_end;
-            if !units[start..].iter().any(visible) {
+        let units = self.cell_units(cell, table, styles);
+        let mut height = 0.0f64;
+        let mut visible = 0usize;
+        for unit in units.iter() {
+            if unit.empty_spacer || unit.vis_start >= unit.vis_end {
                 continue;
             }
-            if end >= units.len() {
-                if end > start {
-                    finished += 1;
-                }
-            } else {
-                continuing += 1;
-                remaining_height = remaining_height.max(
-                    units[end..]
-                        .iter()
-                        .filter(|unit| visible(unit))
-                        .map(|unit| unit.height)
-                        .sum::<f64>(),
-                );
+            if unit.nested_row.is_some() || unit.nested_table_fragment.is_some() {
+                return false;
+            }
+            visible += 1;
+            height += unit.height;
+            if visible > 6 || height > 80.0 {
+                return false;
             }
         }
-        finished >= 1 && continuing >= 1 && remaining_height >= min_remaining_px
+        visible > 0 && height <= 80.0
     }
 
     /// Direct HWPX RowBreak cell의 reset이 선언된 cell box 안에서 source frame을
