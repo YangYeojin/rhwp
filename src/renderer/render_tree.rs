@@ -239,9 +239,16 @@ impl RenderNode {
                         .unwrap_or_default()
                 ),
             ),
-            RenderNodeType::TableCell(tc) => {
-                ("Cell", format!(",\"row\":{},\"col\":{}", tc.row, tc.col))
-            }
+            RenderNodeType::TableCell(tc) => (
+                "Cell",
+                format!(
+                    ",\"row\":{},\"col\":{},\"rowSpan\":{},\"colSpan\":{}",
+                    tc.row,
+                    tc.col,
+                    tc.row_span.max(1),
+                    tc.col_span.max(1)
+                ),
+            ),
             RenderNodeType::Image(image) => {
                 let mut extra = String::new();
                 if let Some(para_index) = image.para_index {
@@ -2258,6 +2265,35 @@ mod tests {
         assert!(json.contains("\"pi\":1355"));
         assert!(json.contains("\"ci\":0"));
         assert!(json.contains("\"textWrap\":\"Square\""));
+    }
+
+    #[test]
+    fn render_tree_json_exposes_cell_spans() {
+        let mut tree = PageRenderTree::new(0, 100.0, 100.0);
+        let cell_id = tree.next_id();
+        tree.root.children.push(RenderNode::new(
+            cell_id,
+            RenderNodeType::TableCell(TableCellNode {
+                col: 2,
+                row: 1,
+                col_span: 3,
+                row_span: 2,
+                border_fill_id: 0,
+                text_direction: 0,
+                clip: false,
+                page_fragment: false,
+                model_cell_index: None,
+            }),
+            BoundingBox::new(0.0, 0.0, 10.0, 20.0),
+        ));
+
+        let json = tree.root.to_json();
+
+        assert!(json.contains("\"type\":\"Cell\""));
+        assert!(json.contains("\"row\":1"));
+        assert!(json.contains("\"col\":2"));
+        assert!(json.contains("\"rowSpan\":2"));
+        assert!(json.contains("\"colSpan\":3"));
     }
 
     // === Task #1154: clip_overlapping_same_bin_images 단위 테스트 ===
