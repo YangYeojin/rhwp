@@ -2207,6 +2207,61 @@ fn issue4149_fit_judgment_memoized_false_without_rewrap() {
     );
 }
 
+/// BREAK 칸은 저장 한 줄이 안쪽 폭만 넘어도 한컴처럼 다시 나눈다.
+/// 1.8× 미만 과밀(업스트림 #2430 이 무시하던 구간)도 재래핑하고,
+/// SQUEEZE/KEEP 은 한 줄을 유지한다.
+#[test]
+fn break_cell_reflows_moderate_overflow_squeeze_and_keep_do_not() {
+    use crate::model::table::{CELL_LINE_WRAP_KEEP, CELL_LINE_WRAP_SQUEEZE};
+
+    let styles = crate::renderer::style_resolver::ResolvedStyleSet::default();
+    let para = issue4149_guard_para("가나다라마바사아자차");
+    let composed0 = compose_paragraph(&para);
+    let natural = estimate_composed_line_width(&composed0.lines[0], &styles);
+    let inner = natural / 1.3;
+    assert!(
+        natural > inner + 0.5 && natural < inner * 1.8,
+        "전제: 1.8× 미만·안쪽 폭 초과 natural={natural:.1} inner={inner:.1}"
+    );
+
+    let mut break_composed = composed0.clone();
+    recompose_stored_single_line_if_overflowing_for_wrap(
+        &mut break_composed,
+        &para,
+        inner,
+        &styles,
+        96.0,
+        crate::model::table::CELL_LINE_WRAP_BREAK,
+    );
+    assert!(
+        break_composed.lines.len() > 1,
+        "BREAK 칸은 칸 폭을 넘기면 다시 나눠야 함 (got {} lines)",
+        break_composed.lines.len()
+    );
+
+    let mut squeeze = compose_paragraph(&para);
+    recompose_stored_single_line_if_overflowing_for_wrap(
+        &mut squeeze,
+        &para,
+        inner,
+        &styles,
+        96.0,
+        CELL_LINE_WRAP_SQUEEZE,
+    );
+    assert_eq!(squeeze.lines.len(), 1, "SQUEEZE 칸은 재줄바꿈하지 않음");
+
+    let mut keep = compose_paragraph(&para);
+    recompose_stored_single_line_if_overflowing_for_wrap(
+        &mut keep,
+        &para,
+        inner,
+        &styles,
+        96.0,
+        CELL_LINE_WRAP_KEEP,
+    );
+    assert_eq!(keep.lines.len(), 1, "KEEP 칸은 재줄바꿈하지 않음");
+}
+
 /// text/char_shapes 를 바꾸는 모든 경로에서 memo 가 미판정으로 돌아간다.
 /// (셀 편집의 단일 관문 reflow_cell_paragraph[_by_path]는 reflow_line_segs 로
 /// 수렴한다 — document_core 관문 자체는 text_editing.rs 테스트에서 검증.)

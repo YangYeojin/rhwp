@@ -1757,19 +1757,31 @@ pub(crate) fn no_ls_short_label_cell(
     cell_inner_height >= em_sum
 }
 
+/// BREAK 칸: 한컴처럼 안쪽 폭을 넘기면 다시 나눈다. 서브픽셀 추정 잡음만 무시.
+const CELL_BREAK_REFLOW_SLACK_PX: f64 = 0.5;
+
+fn cell_wrap_keeps_single_line(line_wrap: u8) -> bool {
+    line_wrap == crate::model::table::CELL_LINE_WRAP_SQUEEZE
+        || line_wrap == crate::model::table::CELL_LINE_WRAP_KEEP
+}
+
 /// [#2291/#2287] 부실 저장 예외 — 기계생성 문서는 다줄 문단에도 저장 lineseg 를
 /// 1개만 남기는 관례가 있어(연결맵 s5 244×10 r183 c8: 76자 문단 ls 1개 → 1줄
 /// 렌더 + "…실천 계획 세" 절단), 셀 재래핑의 "저장 lineseg 신뢰" 가드가 이런
 /// 문단의 텍스트를 segment_width 클립으로 절단한다. 저장 ls==1 이고 그 줄의
-/// 추정 실폭이 셀 내폭을 명백히 초과(×1.05)하면 저장을 불신하고 fresh
-/// 재래핑한다. **가로쓰기 셀 전용** — 세로쓰기 셀은 글자를 세로로 쌓아 가로
-/// 실폭 판정이 무의미하므로 호출부(셀 방향을 아는 곳)에서 걸러야 한다
-/// (task81 세로쓰기 회귀 실측). 정상 1줄(실폭 ≤ 내폭)은 불변.
+/// 추정 실폭이 셀 내폭을 넘기면 저장을 불신하고 fresh 재래핑한다. **가로쓰기
+/// 셀 전용** — 세로쓰기 셀은 글자를 세로로 쌓아 가로 실폭 판정이 무의미하므로
+/// 호출부(셀 방향을 아는 곳)에서 걸러야 한다 (task81 세로쓰기 회귀 실측).
+/// 정상 1줄(실폭 ≤ 내폭)은 불변.
 ///
 /// [#5952] `※`/`☞` 유의사항 bullet의 저장 2~3줄이 각 `segment_width`에서 셀
 /// 내폭과 같지만 합성 행이 ×1.10을 넘으면 Hangul 분할을 복원한다. 행정업무운영
 /// 편람 61쪽의 유의사항 상자가 그 경우다. 일반 다중행 본문, 끝의 빈 저장 행,
 /// 단순한 폭 불일치는 저장 분할을 보존한다.
+///
+/// BREAK 칸(`line_wrap=0`)은 한컴처럼 안쪽 폭에서 다시 나눈다. SQUEEZE/KEEP은
+/// 한 줄을 유지한다. `line_wrap`을 아는 호출은
+/// [`recompose_stored_single_line_if_overflowing_for_wrap`]을 쓴다.
 pub fn recompose_stored_single_line_if_overflowing(
     composed: &mut ComposedParagraph,
     para: &Paragraph,
@@ -1777,7 +1789,29 @@ pub fn recompose_stored_single_line_if_overflowing(
     styles: &ResolvedStyleSet,
     dpi: f64,
 ) {
+    recompose_stored_single_line_if_overflowing_for_wrap(
+        composed,
+        para,
+        cell_inner_width_px,
+        styles,
+        dpi,
+        crate::model::table::CELL_LINE_WRAP_BREAK,
+    );
+}
+
+pub(crate) fn recompose_stored_single_line_if_overflowing_for_wrap(
+    composed: &mut ComposedParagraph,
+    para: &Paragraph,
+    cell_inner_width_px: f64,
+    styles: &ResolvedStyleSet,
+    dpi: f64,
+    line_wrap: u8,
+) {
     if composed.lines.is_empty() || cell_inner_width_px <= 0.0 {
+        return;
+    }
+    // SQUEEZE는 자간 압축, KEEP은 넘침 유지. 둘 다 칸 폭 재줄바꿈을 하지 않는다.
+    if cell_wrap_keeps_single_line(line_wrap) {
         return;
     }
     let authentic_stored = !para.line_segs.is_empty()
@@ -1815,12 +1849,10 @@ pub fn recompose_stored_single_line_if_overflowing(
     if !stored_single {
         return;
     }
-    // [#2430] 발동 임계 ×1.05 는 측정(원패딩) vs 렌더(shrink패딩) 폭 발산(#2237)
-    // 으로 살짝(1.05~1.35×) 초과한 정합 셀까지 거짓 재래핑해 줄수를 부풀리고
-    // 쪽당 표 행 적재를 떨어뜨렸다(분할표 11건 과다분할 회귀). 본문 판
-    // #2525 와 동일하게 ×1.8 로 좁혀 정당한 장평/자간·
-    // 패딩 발산 범위(≤~1.5×)를 넘는 부실 저장만 재래핑한다. #2291 원 타깃
-    // (76자 1-lineseg = ~7.6× 초과, 절단 해소)은 임계 위라 계속 재래핑.
+    // BREAK 칸은 한컴처럼 안쪽 폭에 맞춰 다시 나눈다. 업스트림 #2430 은 추정 폭이
+    // 5~15% 부풀어 1.05×에서 표 쪽수가 늘자 임계를 1.8×로 올렸고, 그 사이 칸은
+    // 한 줄로 남아 가로로 넘친다. doc-conversion 은 넘침보다 줄바꿈을 택한다.
+    // 여유는 서브픽셀(0.5px)만 — #2291 의 대형 과밀도 계속 재래핑된다.
     //
     // [#4149] 판정 memo — 같은 (문단 text·char_shapes, 셀 내폭)이면 판정이 결정적
     // 인데, 페이지 트리 재빌드마다 estimate_composed_line_width 재측정이 반복돼
@@ -1837,7 +1869,10 @@ pub fn recompose_stored_single_line_if_overflowing(
             let measured = composed
                 .lines
                 .first()
-                .map(|l| estimate_composed_line_width(l, styles) > cell_inner_width_px * 1.8)
+                .map(|l| {
+                    estimate_composed_line_width(l, styles)
+                        > cell_inner_width_px + CELL_BREAK_REFLOW_SLACK_PX
+                })
                 .unwrap_or(false);
             para.single_line_overflow_memo.set(width_key, measured);
             measured
@@ -1901,6 +1936,7 @@ pub(crate) fn recompose_horizontal_cell_lines_for_width(
     dpi: f64,
     legacy_hwp3_stored_geometry: bool,
     repair_stored_overflow: bool,
+    line_wrap: u8,
 ) {
     recompose_cell_lines_in_frame(
         composed,
@@ -1911,12 +1947,13 @@ pub(crate) fn recompose_horizontal_cell_lines_for_width(
         legacy_hwp3_stored_geometry,
     );
     if repair_stored_overflow {
-        recompose_stored_single_line_if_overflowing(
+        recompose_stored_single_line_if_overflowing_for_wrap(
             composed,
             para,
             cell_inner_width_px,
             styles,
             dpi,
+            line_wrap,
         );
     }
 }

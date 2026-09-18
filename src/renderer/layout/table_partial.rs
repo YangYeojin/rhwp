@@ -243,6 +243,7 @@ impl CellComposedStore {
                             dpi,
                             legacy_hwp3_stored_geometry,
                             repair_stored_overflow,
+                            cell.line_wrap,
                         );
                     } else {
                         crate::renderer::composer::recompose_cell_lines_in_frame(
@@ -1001,6 +1002,7 @@ impl LayoutEngine {
                                 self.dpi,
                                 self.profile.get().legacy_hwp3_stored_geometry(),
                                 self.profile.get().native_hwp5_layout(),
+                                cell.line_wrap,
                             );
                         } else {
                             crate::renderer::composer::recompose_cell_lines_in_frame(
