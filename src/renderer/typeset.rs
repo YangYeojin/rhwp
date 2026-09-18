@@ -22407,6 +22407,16 @@ impl TypesetEngine {
                             split_total2,
                             row_split_min_keep_uses_painted_height,
                         ) && cand2 <= avail_for_rows + retry_split_row_overflow_tolerance
+                            && !(r > cursor_row
+                                && row_start_cut.is_empty()
+                                && layout_engine.row_cut_leaves_asymmetric_empty_siblings(
+                                    table,
+                                    r,
+                                    row_start_cut,
+                                    &res2.end_cut,
+                                    MIN_TOP_KEEP_PX * 2.0,
+                                    styles,
+                                ))
                         {
                             end_row = r + 1;
                             split_end_cut = res2.end_cut.clone();
@@ -22449,6 +22459,20 @@ impl TypesetEngine {
                     if !retried {
                         end_row = r;
                     }
+                } else if r > cursor_row
+                    && row_start_cut.is_empty()
+                    && layout_engine.row_cut_leaves_asymmetric_empty_siblings(
+                        table,
+                        r,
+                        row_start_cut,
+                        &res.end_cut,
+                        MIN_TOP_KEEP_PX * 2.0,
+                        styles,
+                    )
+                {
+                    // 일부 열만 남기고 나머지는 소진되는 첫 컷은 다음 쪽에
+                    // 빈 왼쪽 칸 + 출처만 이어지는 행을 만든다 → 행 통째 이월.
+                    end_row = r;
                 } else {
                     end_row = r + 1;
                     split_end_cut = res.end_cut.clone();
@@ -23798,15 +23822,8 @@ impl TypesetEngine {
         .filter(|(source_top, source_bottom)| {
             *source_top < st.current_height && *source_bottom <= available
         });
-        // 다행 RowBreak 표는 common.height가 첫 fragment만 뜻할 수도 있다. cell
-        // 내부 reset 없이 다음 host가 새 물리 page를 명시할 때만, object frame을
-        // 현 page 전체를 소유한 frame으로 쓴다.
-        //
-        // 단, 이미 같은 쪽에 그린 선행 문단(제목·안내문)이 있으면 frame rewind 가
-        // 그 글을 표 아래로 깔아 덮는다(청년 매입임대 첨부 산정방법 표: 다음이
-        // 쪽나눔이라 이 분기가 켜지며 선언 높이만으로 통째 배치 → 앞 문단 겹침 +
-        // 실측 행합이 쪽을 넘침). 선행 아이템이 있거나 실측 높이가 잔여에 안
-        // 들어가면 분할 스캔으로 넘긴다.
+        // 다행 RowBreak: 다음 host가 새 물리 page일 때만 object frame을 쪽 전체로
+        // 쓴다. 선행 아이템이 있거나 실측이 잔여에 안 들어가면 분할로 넘긴다.
         let saved_rowbreak_object_frame = (st.profile.hwpx_container()
             && !table.common.treat_as_char
             && matches!(

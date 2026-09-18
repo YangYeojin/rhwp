@@ -1036,17 +1036,12 @@ fn expand_page_fragment_clip_to_own_text_lines(node: &mut RenderNode, page_botto
             continue;
         }
         let line_bottom = child.bbox.y + child.bbox.height;
-        // clip 안에 완전히 들어가면 손댈 것이 없다. 윗변이 clip 위여도 아랫변이
-        // 삐져나온 걸침 줄(k03 ※ 각주)은 되살린다.
         if line_bottom <= clip_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX {
             continue;
         }
-        // 윗변이 이미 쪽 하단 밖인 줄은 어느 부분도 그려지지 않는다 — 되살릴 것이 없다.
         if page_bottom > 0.0 && child.bbox.y > page_bottom {
             continue;
         }
-        // clip 바닥에서 한 줄 남짓 안쪽에서 시작한 줄만 "잘려 나간 그 줄"로 본다.
-        // 걸침 줄은 (y - clip_bottom) 이 음수라 이 문을 그냥 통과한다.
         if child.bbox.y - clip_bottom > child.bbox.height * SPLIT_FRAGMENT_RECOVER_LINE_GAP_RATIO {
             continue;
         }
@@ -1067,12 +1062,7 @@ fn expand_page_fragment_clip_to_own_text_lines(node: &mut RenderNode, page_botto
     }
 }
 
-/// 셀이 이미 배치한 직계 글줄이 행 경계(셀 바닥·가로 괘선)를 조금 넘기면,
-/// 그 행을 늘리고 아래 행·괘선을 같이 민다.
-///
-/// 1) RowBreak 조각의 표 밑줄이 ※ 각주를 가르는 경우(마지막 행).
-/// 2) 중첩 표 뒤 꼬리 글줄이 다음 행과 겹치는 경우(중간 행, k03 p8).
-/// 늘림은 한 줄 남짓으로 막아 먼 아래 행을 끌어오지 않는다.
+/// 직계 글줄이 행 경계·표 밑줄을 조금 넘기면 그 행/밑줄을 한 줄 남짓 늘린다.
 const DIRECT_TEXT_OVERFLOW_GROW_CAP_PX: f64 = 24.0;
 const TABLE_BOTTOM_EDGE_MATCH_PX: f64 = 2.0;
 
@@ -12038,6 +12028,64 @@ impl LayoutEngine {
             })
             .count()
             == 1
+    }
+
+    /// True when a first cut would finish some sibling cells while leaving a
+    /// tall remainder in others — continuation would paint empty left columns.
+    pub(crate) fn row_cut_leaves_asymmetric_empty_siblings(
+        &self,
+        table: &crate::model::table::Table,
+        row: usize,
+        start_cut: &[usize],
+        end_cut: &[usize],
+        min_remaining_px: f64,
+        styles: &ResolvedStyleSet,
+    ) -> bool {
+        let mut row_cells: Vec<&crate::model::table::Cell> = table
+            .cells
+            .iter()
+            .filter(|cell| cell.row as usize == row && cell.row_span == 1)
+            .collect();
+        row_cells.sort_by_key(|cell| cell.col);
+        if row_cells.len() < 2 {
+            return false;
+        }
+
+        let mut finished = 0usize;
+        let mut continuing = 0usize;
+        let mut remaining_height = 0.0f64;
+        for (cell_idx, cell) in row_cells.iter().enumerate() {
+            let units = self.cell_units(cell, table, styles);
+            let start = start_cut
+                .get(cell_idx)
+                .copied()
+                .unwrap_or(0)
+                .min(units.len());
+            let end = end_cut
+                .get(cell_idx)
+                .copied()
+                .unwrap_or(start)
+                .min(units.len());
+            let visible = |unit: &CellUnit| !unit.empty_spacer && unit.vis_start < unit.vis_end;
+            if !units[start..].iter().any(visible) {
+                continue;
+            }
+            if end >= units.len() {
+                if end > start {
+                    finished += 1;
+                }
+            } else {
+                continuing += 1;
+                remaining_height = remaining_height.max(
+                    units[end..]
+                        .iter()
+                        .filter(|unit| visible(unit))
+                        .map(|unit| unit.height)
+                        .sum::<f64>(),
+                );
+            }
+        }
+        finished >= 1 && continuing >= 1 && remaining_height >= min_remaining_px
     }
 
     /// Direct HWPX RowBreak cell의 reset이 선언된 cell box 안에서 source frame을
