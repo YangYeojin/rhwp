@@ -3637,6 +3637,7 @@ impl LayoutEngine {
                         &cell.paragraphs,
                         styles,
                         inner_width,
+                        cell.line_wrap,
                     );
                     // [#3386] 저장 cellSz 가 저장 줄 흐름보다 작은 모순 셀은 한글이
                     // 줄 흐름 + 상하 여백으로 재성장한다 (156678235 p5 내부 표 r0:
@@ -3782,8 +3783,12 @@ impl LayoutEngine {
                 // controls_height를 별도로 더하면 이중 계산됨
                 // [Task #2211] 1-b 와 동일 — 저장 LINE_SEG 줄 흐름은 pad 미가산,
                 // 개체 기반 지오메트리는 pad 가산 유지.
-                let (line_based, object_based) =
-                    self.calc_cell_paragraphs_content_parts(&cell.paragraphs, styles, inner_width);
+                let (line_based, object_based) = self.calc_cell_paragraphs_content_parts(
+                    &cell.paragraphs,
+                    styles,
+                    inner_width,
+                    cell.line_wrap,
+                );
                 // [#3386] 1-b 와 동일 — 모순 선언(span 합) 초과 성장 시 여백 가산.
                 let line_req = if relaxed_pad && Self::cell_has_stored_line_segs(cell) {
                     let decl_h = if cell.height < 0x8000_0000 {
@@ -3917,9 +3922,14 @@ impl LayoutEngine {
         paragraphs: &[Paragraph],
         styles: &ResolvedStyleSet,
         cell_inner_width_px: f64,
+        line_wrap: u8,
     ) -> f64 {
-        let (line_based, object_based) =
-            self.calc_cell_paragraphs_content_parts(paragraphs, styles, cell_inner_width_px);
+        let (line_based, object_based) = self.calc_cell_paragraphs_content_parts(
+            paragraphs,
+            styles,
+            cell_inner_width_px,
+            line_wrap,
+        );
         line_based.max(object_based)
     }
 
@@ -3932,6 +3942,7 @@ impl LayoutEngine {
         paragraphs: &[Paragraph],
         styles: &ResolvedStyleSet,
         cell_inner_width_px: f64,
+        line_wrap: u8,
     ) -> (f64, f64) {
         let cell_para_count = paragraphs.len();
         let line_based_height: f64 = paragraphs
@@ -3950,6 +3961,7 @@ impl LayoutEngine {
                     self.dpi,
                     self.profile.get().legacy_hwp3_stored_geometry(),
                     self.profile.get().native_hwp5_layout(),
+                    line_wrap,
                 );
                 self.calc_para_lines_height(
                     &comp.lines,
@@ -7062,6 +7074,7 @@ impl LayoutEngine {
                             self.dpi,
                             self.profile.get().legacy_hwp3_stored_geometry(),
                             self.profile.get().native_hwp5_layout(),
+                            cell.line_wrap,
                         );
                     } else {
                         crate::renderer::composer::recompose_cell_lines_in_frame(
@@ -8307,6 +8320,7 @@ impl LayoutEngine {
                         self.dpi,
                         self.profile.get().legacy_hwp3_stored_geometry(),
                         self.profile.get().native_hwp5_layout(),
+                        cell.line_wrap,
                     );
                 } else {
                     crate::renderer::composer::recompose_cell_lines_in_frame(
@@ -8480,6 +8494,7 @@ impl LayoutEngine {
                                 self.dpi,
                                 self.profile.get().legacy_hwp3_stored_geometry(),
                                 self.profile.get().native_hwp5_layout(),
+                                cell.line_wrap,
                             );
                         } else {
                             crate::renderer::composer::recompose_cell_lines_in_frame(
@@ -9300,6 +9315,7 @@ impl LayoutEngine {
                     self.dpi,
                     self.profile.get().legacy_hwp3_stored_geometry(),
                     self.profile.get().native_hwp5_layout(),
+                    cell.line_wrap,
                 );
             } else {
                 crate::renderer::composer::recompose_cell_lines_in_frame(

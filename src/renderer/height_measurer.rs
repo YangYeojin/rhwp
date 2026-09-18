@@ -1668,6 +1668,7 @@ impl HeightMeasurer {
                                 self.dpi,
                                 self.legacy_hwp3_stored_geometry,
                                 self.is_native_hwp5,
+                                cell.line_wrap,
                             );
                             let para_style = styles.para_styles.get(p.para_shape_id as usize);
                             let is_last_para = pidx + 1 == cell_para_count;
@@ -2232,6 +2233,7 @@ impl HeightMeasurer {
                                 self.dpi,
                                 self.legacy_hwp3_stored_geometry,
                                 self.is_native_hwp5,
+                                cell.line_wrap,
                             );
                             comp.lines
                                 .last()
@@ -2311,6 +2313,7 @@ impl HeightMeasurer {
                                 self.dpi,
                                 self.legacy_hwp3_stored_geometry,
                                 self.is_native_hwp5,
+                                cell.line_wrap,
                             );
                             let para_style =
                                 styles.para_styles.get(cell_para.para_shape_id as usize);
@@ -2534,6 +2537,7 @@ impl HeightMeasurer {
                                 self.dpi,
                                 self.legacy_hwp3_stored_geometry,
                                 self.is_native_hwp5,
+                                cell.line_wrap,
                             );
                             let para_style = styles.para_styles.get(p.para_shape_id as usize);
                             let is_last_para = pidx + 1 == cell_para_count;
