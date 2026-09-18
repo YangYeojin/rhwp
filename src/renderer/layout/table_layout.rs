@@ -1035,7 +1035,10 @@ fn expand_page_fragment_clip_to_own_text_lines(node: &mut RenderNode, page_botto
         if !child.visible || !matches!(child.node_type, RenderNodeType::TextLine(_)) {
             continue;
         }
-        if child.bbox.y <= clip_bottom {
+        let line_bottom = child.bbox.y + child.bbox.height;
+        // clip 안에 완전히 들어가면 손댈 것이 없다. 윗변이 clip 위여도 아랫변이
+        // 삐져나온 걸침 줄(k03 ※ 각주)은 되살린다.
+        if line_bottom <= clip_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX {
             continue;
         }
         // 윗변이 이미 쪽 하단 밖인 줄은 어느 부분도 그려지지 않는다 — 되살릴 것이 없다.
@@ -1043,6 +1046,7 @@ fn expand_page_fragment_clip_to_own_text_lines(node: &mut RenderNode, page_botto
             continue;
         }
         // clip 바닥에서 한 줄 남짓 안쪽에서 시작한 줄만 "잘려 나간 그 줄"로 본다.
+        // 걸침 줄은 (y - clip_bottom) 이 음수라 이 문을 그냥 통과한다.
         if child.bbox.y - clip_bottom > child.bbox.height * SPLIT_FRAGMENT_RECOVER_LINE_GAP_RATIO {
             continue;
         }
@@ -1060,6 +1064,107 @@ fn expand_page_fragment_clip_to_own_text_lines(node: &mut RenderNode, page_botto
     }
     if owned_bottom > clip_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX {
         node.bbox.height = owned_bottom - node.bbox.y;
+    }
+}
+
+/// 마지막 행 셀이 이미 배치한 직계 글줄이 표 밑줄보다 조금 아래로 넘치면, 셀 clip과
+/// 밑·세로 괘선을 그 줄 바닥까지 내린다.
+///
+/// RowBreak 거대 셀은 쪽 조각 높이를 중첩 표(+머리글)에서 끊고, 저장 vpos 는 그 아래
+/// 각주를 같은 셀에 그린다. clip/밑줄이 그 줄 중간을 가로질러 글리프가 잘린다
+/// (`※ 소득 및 자산 산정방법…` — 걸침 약 한 줄). 한글은 밑줄을 각주 아래에 두고
+/// 다음 본문(경합)은 표 밖에 둔다. 늘림은 한 줄 남짓으로 막아 다음 행을 침범하지 않는다.
+const DIRECT_TEXT_OVERFLOW_GROW_CAP_PX: f64 = 24.0;
+const TABLE_BOTTOM_EDGE_MATCH_PX: f64 = 2.0;
+
+fn extend_table_bottom_to_direct_cell_text_overflow(table_node: &mut RenderNode) {
+    if !matches!(table_node.node_type, RenderNodeType::Table(_)) {
+        return;
+    }
+    let table_top = table_node.bbox.y;
+    let table_bottom = table_top + table_node.bbox.height;
+
+    let mut overflow_bottom = table_bottom;
+    for child in &table_node.children {
+        if !matches!(child.node_type, RenderNodeType::TableCell(_)) {
+            continue;
+        }
+        let cell_bottom = child.bbox.y + child.bbox.height;
+        // 마지막 행: 바닥이 표 밑줄 근처이거나, 직계 글줄 되살리기로 이미 조금 넘긴 칸.
+        // 중간 행(밑줄보다 분명히 위)과 과대 칸은 건너뛴다.
+        if cell_bottom < table_bottom - TABLE_BOTTOM_EDGE_MATCH_PX
+            || cell_bottom
+                > table_bottom + DIRECT_TEXT_OVERFLOW_GROW_CAP_PX + TABLE_BOTTOM_EDGE_MATCH_PX
+        {
+            continue;
+        }
+        for line in &child.children {
+            if !line.visible || !matches!(line.node_type, RenderNodeType::TextLine(_)) {
+                continue;
+            }
+            let line_bottom = line.bbox.y + line.bbox.height;
+            if line_bottom <= table_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX {
+                continue;
+            }
+            if line.bbox.y - table_bottom > line.bbox.height * SPLIT_FRAGMENT_RECOVER_LINE_GAP_RATIO
+            {
+                continue;
+            }
+            overflow_bottom = overflow_bottom.max(line_bottom);
+        }
+    }
+
+    overflow_bottom = overflow_bottom.min(table_bottom + DIRECT_TEXT_OVERFLOW_GROW_CAP_PX);
+    if overflow_bottom <= table_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX {
+        return;
+    }
+
+    for child in &mut table_node.children {
+        if !matches!(child.node_type, RenderNodeType::TableCell(_)) {
+            continue;
+        }
+        let cell_bottom = child.bbox.y + child.bbox.height;
+        if cell_bottom < table_bottom - TABLE_BOTTOM_EDGE_MATCH_PX
+            || cell_bottom
+                > table_bottom + DIRECT_TEXT_OVERFLOW_GROW_CAP_PX + TABLE_BOTTOM_EDGE_MATCH_PX
+        {
+            continue;
+        }
+        child.bbox.height = (overflow_bottom - child.bbox.y).max(child.bbox.height);
+    }
+    table_node.bbox.height = overflow_bottom - table_top;
+
+    for child in &mut table_node.children {
+        let RenderNodeType::Line(line) = &mut child.node_type else {
+            continue;
+        };
+        let horizontal = (line.y1 - line.y2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+        let vertical = (line.x1 - line.x2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+        if horizontal {
+            let y = line.y1;
+            if (y - table_bottom).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX {
+                line.y1 = overflow_bottom;
+                line.y2 = overflow_bottom;
+            }
+        } else if vertical {
+            let y_hi = line.y1.max(line.y2);
+            if (y_hi - table_bottom).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX {
+                if line.y1 >= line.y2 {
+                    line.y1 = overflow_bottom;
+                } else {
+                    line.y2 = overflow_bottom;
+                }
+            }
+        } else {
+            continue;
+        }
+        let ink = line.ink_bbox();
+        child.bbox = BoundingBox::new(
+            ink.x,
+            ink.y,
+            ink.width.max(NESTED_FRAGMENT_EDGE_EPSILON_PX),
+            ink.height.max(NESTED_FRAGMENT_EDGE_EPSILON_PX),
+        );
     }
 }
 
@@ -1329,6 +1434,7 @@ pub(super) fn extend_completed_nested_table_border_clips(
         );
     }
     extend_table_horizontal_bbox_to_direct_cell_paint(node);
+    extend_table_bottom_to_direct_cell_text_overflow(node);
     extend_clipped_cell_horizontal_clip_to_nested_table_borders(node);
     extend_clipped_cell_vertical_clip_to_nearby_nested_table_borders(node);
     repair_clipped_nested_table_fragment_frame(
@@ -17182,5 +17288,161 @@ mod row_cut_tests {
             fp(&spacer),
             "공백 스페이서 클래스 전이는 지문이 변해야 한다"
         );
+    }
+}
+
+#[cfg(test)]
+mod trailing_text_overflow_tests {
+    use super::{
+        expand_page_fragment_clip_to_own_text_lines,
+        extend_table_bottom_to_direct_cell_text_overflow,
+    };
+    use crate::renderer::render_tree::*;
+    use crate::renderer::LineStyle;
+
+    fn cell_node(clip: bool, page_fragment: bool, bbox: BoundingBox) -> RenderNode {
+        RenderNode::new(
+            1,
+            RenderNodeType::TableCell(TableCellNode {
+                col: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                border_fill_id: 0,
+                text_direction: 0,
+                clip,
+                page_fragment,
+                model_cell_index: None,
+            }),
+            bbox,
+        )
+    }
+
+    fn text_line(id: u32, y: f64, height: f64) -> RenderNode {
+        RenderNode::new(
+            id,
+            RenderNodeType::TextLine(TextLineNode::new(height, height * 0.8)),
+            BoundingBox::new(40.0, y, 400.0, height),
+        )
+    }
+
+    fn line_node(id: u32, x1: f64, y1: f64, x2: f64, y2: f64) -> RenderNode {
+        let mut style = LineStyle::default();
+        style.width = 1.0;
+        let line = LineNode::new(x1, y1, x2, y2, style);
+        let ink = line.ink_bbox();
+        RenderNode::new(id, RenderNodeType::Line(line), ink)
+    }
+
+    #[test]
+    fn expand_page_fragment_clip_recovers_straddling_text_line() {
+        let mut cell = cell_node(true, true, BoundingBox::new(37.8, 56.7, 710.6, 315.8));
+        cell.children.push(text_line(2, 365.8, 16.0));
+        expand_page_fragment_clip_to_own_text_lines(&mut cell, 1100.0);
+        let bottom = cell.bbox.y + cell.bbox.height;
+        assert!(
+            (bottom - 381.8).abs() < 0.01,
+            "straddling footnote clip bottom, got {bottom}"
+        );
+    }
+
+    #[test]
+    fn extend_table_bottom_moves_border_below_straddling_text() {
+        let mut table = RenderNode::new(
+            1,
+            RenderNodeType::Table(TableNode {
+                row_count: 1,
+                col_count: 1,
+                border_fill_id: 0,
+                section_index: None,
+                para_index: None,
+                control_index: None,
+                cell_context: None,
+            }),
+            BoundingBox::new(37.8, 56.7, 710.6, 315.1),
+        );
+        let mut cell = cell_node(true, true, BoundingBox::new(37.8, 56.7, 710.6, 315.8));
+        cell.children.push(text_line(2, 365.8, 16.0));
+        table.children.push(cell);
+        table.children.push(line_node(3, 37.8, 371.8, 748.4, 371.8));
+        table.children.push(line_node(4, 37.8, 56.7, 37.8, 371.8));
+
+        extend_table_bottom_to_direct_cell_text_overflow(&mut table);
+
+        let table_bottom = table.bbox.y + table.bbox.height;
+        assert!(
+            (table_bottom - 381.8).abs() < 0.01,
+            "table bottom, got {table_bottom}"
+        );
+        let cell_bottom = table.children[0].bbox.y + table.children[0].bbox.height;
+        assert!(
+            (cell_bottom - 381.8).abs() < 0.01,
+            "cell bottom, got {cell_bottom}"
+        );
+        let RenderNodeType::Line(bottom) = &table.children[1].node_type else {
+            panic!("expected bottom border");
+        };
+        assert!((bottom.y1 - 381.8).abs() < 0.01);
+        let RenderNodeType::Line(vert) = &table.children[2].node_type else {
+            panic!("expected vertical border");
+        };
+        assert!((vert.y1.max(vert.y2) - 381.8).abs() < 0.01);
+    }
+
+    #[test]
+    fn extend_table_bottom_moves_border_after_cell_clip_already_grew() {
+        let mut table = RenderNode::new(
+            1,
+            RenderNodeType::Table(TableNode {
+                row_count: 1,
+                col_count: 1,
+                border_fill_id: 0,
+                section_index: None,
+                para_index: None,
+                control_index: None,
+                cell_context: None,
+            }),
+            BoundingBox::new(37.8, 56.7, 710.6, 315.1),
+        );
+        let mut cell = cell_node(true, true, BoundingBox::new(37.8, 56.7, 710.6, 325.1));
+        cell.children.push(text_line(2, 365.8, 16.0));
+        table.children.push(cell);
+        table.children.push(line_node(3, 37.8, 371.8, 748.4, 371.8));
+        table.children.push(line_node(4, 37.8, 56.7, 37.8, 371.8));
+
+        extend_table_bottom_to_direct_cell_text_overflow(&mut table);
+
+        let RenderNodeType::Line(bottom) = &table.children[1].node_type else {
+            panic!("expected bottom border");
+        };
+        assert!(
+            (bottom.y1 - 381.8).abs() < 0.01,
+            "bottom border after prior clip grow, got {}",
+            bottom.y1
+        );
+    }
+
+    #[test]
+    fn extend_table_bottom_ignores_text_far_below_border() {
+        let mut table = RenderNode::new(
+            1,
+            RenderNodeType::Table(TableNode {
+                row_count: 1,
+                col_count: 1,
+                border_fill_id: 0,
+                section_index: None,
+                para_index: None,
+                control_index: None,
+                cell_context: None,
+            }),
+            BoundingBox::new(0.0, 0.0, 100.0, 50.0),
+        );
+        let mut cell = cell_node(true, false, BoundingBox::new(0.0, 0.0, 100.0, 50.0));
+        cell.children.push(text_line(2, 90.0, 16.0));
+        table.children.push(cell);
+        table.children.push(line_node(3, 0.0, 50.0, 100.0, 50.0));
+
+        extend_table_bottom_to_direct_cell_text_overflow(&mut table);
+        assert!((table.bbox.height - 50.0).abs() < 0.01);
     }
 }
