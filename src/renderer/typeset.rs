@@ -23801,6 +23801,12 @@ impl TypesetEngine {
         // 다행 RowBreak 표는 common.height가 첫 fragment만 뜻할 수도 있다. cell
         // 내부 reset 없이 다음 host가 새 물리 page를 명시할 때만, object frame을
         // 현 page 전체를 소유한 frame으로 쓴다.
+        //
+        // 단, 이미 같은 쪽에 그린 선행 문단(제목·안내문)이 있으면 frame rewind 가
+        // 그 글을 표 아래로 깔아 덮는다(청년 매입임대 첨부 산정방법 표: 다음이
+        // 쪽나눔이라 이 분기가 켜지며 선언 높이만으로 통째 배치 → 앞 문단 겹침 +
+        // 실측 행합이 쪽을 넘침). 선행 아이템이 있거나 실측 높이가 잔여에 안
+        // 들어가면 분할 스캔으로 넘긴다.
         let saved_rowbreak_object_frame = (st.profile.hwpx_container()
             && !table.common.treat_as_char
             && matches!(
@@ -23813,6 +23819,7 @@ impl TypesetEngine {
             && ft.table_footnotes.is_empty()
             && signed_hwpunit(table.common.vertical_offset) <= 0
             && next_starts_new_page
+            && st.current_items.is_empty()
             && !rowbreak_table_has_internal_saved_vpos_reset(table))
         .then(|| {
             let mut source_lines = para
@@ -23827,7 +23834,9 @@ impl TypesetEngine {
         .flatten()
         .and_then(|(source_top, _)| {
             let source_bottom = source_top + declared_object_total - host_spacing_total;
-            (source_top < st.current_height && source_bottom <= available)
+            (source_top < st.current_height
+                && source_bottom <= available
+                && source_top + table_total <= available + 0.5)
                 .then_some((source_top, source_bottom))
         });
         let saved_table_source_frame =
