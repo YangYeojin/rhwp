@@ -1067,13 +1067,12 @@ fn expand_page_fragment_clip_to_own_text_lines(node: &mut RenderNode, page_botto
     }
 }
 
-/// 마지막 행 셀이 이미 배치한 직계 글줄이 표 밑줄보다 조금 아래로 넘치면, 셀 clip과
-/// 밑·세로 괘선을 그 줄 바닥까지 내린다.
+/// 셀이 이미 배치한 직계 글줄이 행 경계(셀 바닥·가로 괘선)를 조금 넘기면,
+/// 그 행을 늘리고 아래 행·괘선을 같이 민다.
 ///
-/// RowBreak 거대 셀은 쪽 조각 높이를 중첩 표(+머리글)에서 끊고, 저장 vpos 는 그 아래
-/// 각주를 같은 셀에 그린다. clip/밑줄이 그 줄 중간을 가로질러 글리프가 잘린다
-/// (`※ 소득 및 자산 산정방법…` — 걸침 약 한 줄). 한글은 밑줄을 각주 아래에 두고
-/// 다음 본문(경합)은 표 밖에 둔다. 늘림은 한 줄 남짓으로 막아 다음 행을 침범하지 않는다.
+/// 1) RowBreak 조각의 표 밑줄이 ※ 각주를 가르는 경우(마지막 행).
+/// 2) 중첩 표 뒤 꼬리 글줄이 다음 행과 겹치는 경우(중간 행, k03 p8).
+/// 늘림은 한 줄 남짓으로 막아 먼 아래 행을 끌어오지 않는다.
 const DIRECT_TEXT_OVERFLOW_GROW_CAP_PX: f64 = 24.0;
 const TABLE_BOTTOM_EDGE_MATCH_PX: f64 = 2.0;
 
@@ -1082,90 +1081,183 @@ fn extend_table_bottom_to_direct_cell_text_overflow(table_node: &mut RenderNode)
         return;
     }
     let table_top = table_node.bbox.y;
-    let table_bottom = table_top + table_node.bbox.height;
+    let old_table_bottom = table_top + table_node.bbox.height;
 
-    let mut overflow_bottom = table_bottom;
+    let mut seam_needs: Vec<(f64, f64)> = Vec::new();
+    let mut record = |seam: f64, needed: f64, seams: &mut Vec<(f64, f64)>| {
+        if needed <= seam + NESTED_FRAGMENT_EDGE_EPSILON_PX {
+            return;
+        }
+        let needed = needed.min(seam + DIRECT_TEXT_OVERFLOW_GROW_CAP_PX);
+        if let Some(entry) = seams
+            .iter_mut()
+            .find(|(y, _)| (*y - seam).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX)
+        {
+            entry.0 = entry.0.min(seam);
+            entry.1 = entry.1.max(needed);
+        } else {
+            seams.push((seam, needed));
+        }
+    };
+
     for child in &table_node.children {
         if !matches!(child.node_type, RenderNodeType::TableCell(_)) {
             continue;
         }
-        let cell_bottom = child.bbox.y + child.bbox.height;
-        // 마지막 행: 바닥이 표 밑줄 근처이거나, 직계 글줄 되살리기로 이미 조금 넘긴 칸.
-        // 중간 행(밑줄보다 분명히 위)과 과대 칸은 건너뛴다.
-        if cell_bottom < table_bottom - TABLE_BOTTOM_EDGE_MATCH_PX
-            || cell_bottom
-                > table_bottom + DIRECT_TEXT_OVERFLOW_GROW_CAP_PX + TABLE_BOTTOM_EDGE_MATCH_PX
-        {
-            continue;
-        }
+        let cell_top = child.bbox.y;
+        let cell_bottom = cell_top + child.bbox.height;
         for line in &child.children {
             if !line.visible || !matches!(line.node_type, RenderNodeType::TextLine(_)) {
                 continue;
             }
             let line_bottom = line.bbox.y + line.bbox.height;
-            if line_bottom <= table_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX {
-                continue;
-            }
-            if line.bbox.y - table_bottom > line.bbox.height * SPLIT_FRAGMENT_RECOVER_LINE_GAP_RATIO
+            // A) 셀 바닥을 넘는 직계 글줄 → 그 바닥이 이음새.
+            if line_bottom > cell_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX
+                && line.bbox.y - cell_bottom
+                    <= line.bbox.height * SPLIT_FRAGMENT_RECOVER_LINE_GAP_RATIO
             {
-                continue;
+                record(cell_bottom, line_bottom, &mut seam_needs);
             }
-            overflow_bottom = overflow_bottom.max(line_bottom);
+            // B) 셀 안(또는 바로 위) 가로 괘선을 글줄이 가로지름 — clip 만 먼저
+            // 늘어나고 밑줄이 남은 경우 포함.
+            for edge in &table_node.children {
+                let RenderNodeType::Line(border) = &edge.node_type else {
+                    continue;
+                };
+                if (border.y1 - border.y2).abs() > NESTED_FRAGMENT_EDGE_EPSILON_PX {
+                    continue;
+                }
+                let by = border.y1;
+                if by <= cell_top + TABLE_BOTTOM_EDGE_MATCH_PX {
+                    continue;
+                }
+                if by > cell_bottom + TABLE_BOTTOM_EDGE_MATCH_PX {
+                    continue;
+                }
+                if cell_bottom - by > DIRECT_TEXT_OVERFLOW_GROW_CAP_PX + TABLE_BOTTOM_EDGE_MATCH_PX {
+                    continue;
+                }
+                if line.bbox.y >= by - NESTED_FRAGMENT_EDGE_EPSILON_PX {
+                    continue;
+                }
+                if line_bottom <= by + NESTED_FRAGMENT_EDGE_EPSILON_PX {
+                    continue;
+                }
+                record(by, line_bottom, &mut seam_needs);
+            }
         }
     }
-
-    overflow_bottom = overflow_bottom.min(table_bottom + DIRECT_TEXT_OVERFLOW_GROW_CAP_PX);
-    if overflow_bottom <= table_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX {
+    if seam_needs.is_empty() {
         return;
     }
+    seam_needs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    for child in &mut table_node.children {
-        if !matches!(child.node_type, RenderNodeType::TableCell(_)) {
+    let mut cumulative = 0.0_f64;
+    for (seam0, needed0) in seam_needs {
+        let seam = seam0 + cumulative;
+        let needed = needed0 + cumulative;
+        if needed <= seam + NESTED_FRAGMENT_EDGE_EPSILON_PX {
             continue;
         }
-        let cell_bottom = child.bbox.y + child.bbox.height;
-        if cell_bottom < table_bottom - TABLE_BOTTOM_EDGE_MATCH_PX
-            || cell_bottom
-                > table_bottom + DIRECT_TEXT_OVERFLOW_GROW_CAP_PX + TABLE_BOTTOM_EDGE_MATCH_PX
+
+        let mut old_row_bottom = seam;
+        for child in &table_node.children {
+            if !matches!(child.node_type, RenderNodeType::TableCell(_)) {
+                continue;
+            }
+            let cell_top = child.bbox.y;
+            let cell_bottom = cell_top + child.bbox.height;
+            let ends_at_seam = (cell_bottom - seam).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX;
+            let contains_seam =
+                cell_top < seam - TABLE_BOTTOM_EDGE_MATCH_PX && cell_bottom > seam;
+            if ends_at_seam || contains_seam {
+                old_row_bottom = old_row_bottom.max(cell_bottom);
+            }
+        }
+        let follow_delta = needed - old_row_bottom;
+        if follow_delta <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+            && (needed - seam) <= NESTED_FRAGMENT_EDGE_EPSILON_PX
         {
             continue;
         }
-        child.bbox.height = (overflow_bottom - child.bbox.y).max(child.bbox.height);
-    }
-    table_node.bbox.height = overflow_bottom - table_top;
 
-    for child in &mut table_node.children {
-        let RenderNodeType::Line(line) = &mut child.node_type else {
-            continue;
-        };
-        let horizontal = (line.y1 - line.y2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
-        let vertical = (line.x1 - line.x2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
-        if horizontal {
-            let y = line.y1;
-            if (y - table_bottom).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX {
-                line.y1 = overflow_bottom;
-                line.y2 = overflow_bottom;
-            }
-        } else if vertical {
-            let y_hi = line.y1.max(line.y2);
-            if (y_hi - table_bottom).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX {
-                if line.y1 >= line.y2 {
-                    line.y1 = overflow_bottom;
-                } else {
-                    line.y2 = overflow_bottom;
+        for child in &mut table_node.children {
+            if matches!(child.node_type, RenderNodeType::TableCell(_)) {
+                let cell_top = child.bbox.y;
+                let cell_bottom = cell_top + child.bbox.height;
+                let ends_at_seam = (cell_bottom - seam).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX
+                    || (cell_bottom - old_row_bottom).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX;
+                let contains_seam =
+                    cell_top < seam - TABLE_BOTTOM_EDGE_MATCH_PX && cell_bottom > seam;
+                if ends_at_seam || contains_seam {
+                    child.bbox.height = child.bbox.height.max(needed - cell_top);
+                } else if cell_top >= old_row_bottom - TABLE_BOTTOM_EDGE_MATCH_PX {
+                    translate_render_subtree_y(child, follow_delta.max(0.0));
                 }
+                continue;
             }
-        } else {
-            continue;
+            let RenderNodeType::Line(line) = &mut child.node_type else {
+                continue;
+            };
+            let horizontal = (line.y1 - line.y2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+            let vertical = (line.x1 - line.x2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+            if horizontal {
+                let y = line.y1;
+                if (y - seam).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX
+                    || (y - old_row_bottom).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX
+                {
+                    line.y1 = needed;
+                    line.y2 = needed;
+                } else if y > old_row_bottom + TABLE_BOTTOM_EDGE_MATCH_PX {
+                    line.y1 += follow_delta.max(0.0);
+                    line.y2 += follow_delta.max(0.0);
+                } else {
+                    continue;
+                }
+            } else if vertical {
+                let y_lo = line.y1.min(line.y2);
+                let y_hi = line.y1.max(line.y2);
+                if (y_hi - seam).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX
+                    || (y_hi - old_row_bottom).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX
+                {
+                    if line.y1 >= line.y2 {
+                        line.y1 = needed;
+                    } else {
+                        line.y2 = needed;
+                    }
+                } else if y_lo > old_row_bottom + TABLE_BOTTOM_EDGE_MATCH_PX {
+                    line.y1 += follow_delta.max(0.0);
+                    line.y2 += follow_delta.max(0.0);
+                } else {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+            let ink = line.ink_bbox();
+            child.bbox = BoundingBox::new(
+                ink.x,
+                ink.y,
+                ink.width.max(NESTED_FRAGMENT_EDGE_EPSILON_PX),
+                ink.height.max(NESTED_FRAGMENT_EDGE_EPSILON_PX),
+            );
         }
-        let ink = line.ink_bbox();
-        child.bbox = BoundingBox::new(
-            ink.x,
-            ink.y,
-            ink.width.max(NESTED_FRAGMENT_EDGE_EPSILON_PX),
-            ink.height.max(NESTED_FRAGMENT_EDGE_EPSILON_PX),
-        );
+        cumulative += follow_delta.max(0.0);
     }
+
+    let mut content_bottom = old_table_bottom;
+    for child in &table_node.children {
+        if matches!(child.node_type, RenderNodeType::TableCell(_)) {
+            content_bottom = content_bottom.max(child.bbox.y + child.bbox.height);
+        } else if let RenderNodeType::Line(line) = &child.node_type {
+            if (line.y1 - line.y2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX {
+                content_bottom = content_bottom.max(line.y1);
+            } else {
+                content_bottom = content_bottom.max(line.y1.max(line.y2));
+            }
+        }
+    }
+    table_node.bbox.height = content_bottom.max(old_table_bottom) - table_top;
 }
 
 /// Repair the frame and source-flow seam of a true nested-table continuation.
@@ -17420,6 +17512,53 @@ mod trailing_text_overflow_tests {
             "bottom border after prior clip grow, got {}",
             bottom.y1
         );
+    }
+
+    #[test]
+    fn extend_table_bottom_pushes_next_row_for_mid_row_overflow() {
+        let mut table = RenderNode::new(
+            1,
+            RenderNodeType::Table(TableNode {
+                row_count: 2,
+                col_count: 1,
+                border_fill_id: 0,
+                section_index: None,
+                para_index: None,
+                control_index: None,
+                cell_context: None,
+            }),
+            BoundingBox::new(37.8, 141.8, 710.6, 391.4),
+        );
+        let mut upper = cell_node(false, false, BoundingBox::new(37.8, 141.8, 710.6, 344.1));
+        upper.children.push(text_line(2, 480.0, 13.3));
+        let mut lower = cell_node(false, false, BoundingBox::new(37.8, 485.9, 710.6, 47.3));
+        lower.children.push(text_line(3, 491.5, 13.3));
+        table.children.push(upper);
+        table.children.push(lower);
+        table.children.push(line_node(4, 37.8, 485.1, 748.4, 485.1));
+        table.children.push(line_node(5, 37.8, 141.8, 37.8, 485.9));
+
+        extend_table_bottom_to_direct_cell_text_overflow(&mut table);
+
+        let upper_bot = table.children[0].bbox.y + table.children[0].bbox.height;
+        assert!(
+            (upper_bot - 493.3).abs() < 0.01,
+            "upper cell bottom, got {upper_bot}"
+        );
+        assert!(
+            (table.children[1].bbox.y - 493.3).abs() < 0.01,
+            "lower cell y, got {}",
+            table.children[1].bbox.y
+        );
+        assert!(
+            (table.children[1].children[0].bbox.y - 498.9).abs() < 0.01,
+            "lower text y, got {}",
+            table.children[1].children[0].bbox.y
+        );
+        let RenderNodeType::Line(seam) = &table.children[2].node_type else {
+            panic!("expected seam");
+        };
+        assert!((seam.y1 - 493.3).abs() < 0.01, "seam y {}", seam.y1);
     }
 
     #[test]
