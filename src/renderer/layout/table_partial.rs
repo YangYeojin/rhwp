@@ -1096,8 +1096,31 @@ impl LayoutEngine {
             } else {
                 None
             };
-            let line_ranges: Option<Vec<(usize, usize)>> = cut_units
+            let mut line_ranges: Option<Vec<(usize, usize)>> = cut_units
                 .map(|(su, eu)| self.cell_line_ranges_from_cut(cell, table, styles, su, eu));
+            // Continuation/straddle cuts that already consumed a short label leave an
+            // empty band (주택공고 구분·항목). Re-paint the label instead.
+            let repeating_short_label = {
+                let ranges_empty = line_ranges
+                    .as_ref()
+                    .is_some_and(|ranges| ranges.iter().all(|&(s, e)| s >= e));
+                let continuation_context = is_continuation
+                    || straddles_fragment_start
+                    || (is_in_split_row && !start_cut.is_empty());
+                ranges_empty
+                    && continuation_context
+                    && cut_units.is_some_and(|(su, _)| su > 0)
+                    && self.cell_is_short_repeatable_label(cell, table, styles)
+            };
+            if repeating_short_label {
+                line_ranges = Some(self.cell_line_ranges_from_cut(
+                    cell,
+                    table,
+                    styles,
+                    0,
+                    usize::MAX,
+                ));
+            }
             // 셀 내 텍스트 높이 (분할 행이면 줄 범위 내만 계산)
             // spacing_before: 셀 첫 문단 제외, spacing_after: 셀 마지막 문단 제외
             let split_para_count = cell.paragraphs.len();
@@ -1232,7 +1255,10 @@ impl LayoutEngine {
             });
             let cell_content_cut_by_slice = has_multicol_nested
                 && self.cell_units_content_height(cell, table, styles) > inner_height + 0.5;
-            let effective_align = if (is_in_split_row || is_rowbreak_straddle)
+            let effective_align = if repeating_short_label && is_in_split_row {
+                // Re-shown item labels sit at the top beside continuing body text.
+                VerticalAlign::Top
+            } else if (is_in_split_row || is_rowbreak_straddle)
                 && (cell_was_split || cell_content_cut_by_slice)
             {
                 VerticalAlign::Top

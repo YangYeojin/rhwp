@@ -22407,16 +22407,6 @@ impl TypesetEngine {
                             split_total2,
                             row_split_min_keep_uses_painted_height,
                         ) && cand2 <= avail_for_rows + retry_split_row_overflow_tolerance
-                            && !(r > cursor_row
-                                && row_start_cut.is_empty()
-                                && layout_engine.row_cut_leaves_asymmetric_empty_siblings(
-                                    table,
-                                    r,
-                                    row_start_cut,
-                                    &res2.end_cut,
-                                    MIN_TOP_KEEP_PX * 2.0,
-                                    styles,
-                                ))
                         {
                             end_row = r + 1;
                             split_end_cut = res2.end_cut.clone();
@@ -22459,20 +22449,6 @@ impl TypesetEngine {
                     if !retried {
                         end_row = r;
                     }
-                } else if r > cursor_row
-                    && row_start_cut.is_empty()
-                    && layout_engine.row_cut_leaves_asymmetric_empty_siblings(
-                        table,
-                        r,
-                        row_start_cut,
-                        &res.end_cut,
-                        MIN_TOP_KEEP_PX * 2.0,
-                        styles,
-                    )
-                {
-                    // 일부 열만 남기고 나머지는 소진되는 첫 컷은 다음 쪽에
-                    // 빈 왼쪽 칸 + 출처만 이어지는 행을 만든다 → 행 통째 이월.
-                    end_row = r;
                 } else {
                     end_row = r + 1;
                     split_end_cut = res.end_cut.clone();
