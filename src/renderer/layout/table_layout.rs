@@ -3977,8 +3977,14 @@ impl LayoutEngine {
                 )
             })
             .sum();
-        let object_based = self
-            .calc_nested_controls_bottom_height(paragraphs, styles)
+        let nested_bottom = self.calc_nested_controls_bottom_height(paragraphs, styles);
+        let nested_with_trailing = nested_bottom
+            + crate::renderer::unaccounted_trailing_after_nested_table_px(
+                paragraphs,
+                nested_bottom,
+                self.dpi,
+            );
+        let object_based = nested_with_trailing
             .max(self.calc_non_inline_controls_flow_height(paragraphs))
             .max(self.calc_cell_wrap_objects_bottom_height(paragraphs));
         (line_based_height, object_based)

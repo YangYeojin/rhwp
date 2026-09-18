@@ -1963,9 +1963,15 @@ impl HeightMeasurer {
                         depth,
                         cell_w_px,
                     );
+                    let nested_with_trailing = nested_bottom
+                        + crate::renderer::unaccounted_trailing_after_nested_table_px(
+                            &cell.paragraphs,
+                            nested_bottom,
+                            self.dpi,
+                        );
                     hwpunit_to_px(last_seg_end, self.dpi)
                         .max(text_height)
-                        .max(nested_bottom)
+                        .max(nested_with_trailing)
                         .max(self.cell_wrap_objects_bottom_height(&cell.paragraphs))
                 } else {
                     // 단, 비-인라인 이미지/도형은 LINE_SEG에 미포함이므로 별도 합산
@@ -2758,6 +2764,12 @@ impl HeightMeasurer {
                 let non_inline_h = self.measure_non_inline_controls_height(&cell.paragraphs);
                 let nested_bottom =
                     self.cell_nested_controls_bottom(&cell.paragraphs, styles, depth, cell_w_px);
+                let nested_with_trailing = nested_bottom
+                    + crate::renderer::unaccounted_trailing_after_nested_table_px(
+                        &cell.paragraphs,
+                        nested_bottom,
+                        self.dpi,
+                    );
                 let wrap_bottom = self.cell_wrap_objects_bottom_height(&cell.paragraphs);
                 // [Task #2221] 단일행과 동일 — 중첩/TAC 표의 저장 LINE_SEG 텍스트
                 // 셀은 pad 미가산 (layout 2-b relaxed_pad 미러).
@@ -2769,7 +2781,7 @@ impl HeightMeasurer {
                         .iter()
                         .all(|p| !crate::renderer::para_has_no_stored_line_segs(p));
                 let required_height = if relaxed_pad_mirror {
-                    let object_based = non_inline_h.max(nested_bottom).max(wrap_bottom);
+                    let object_based = non_inline_h.max(nested_with_trailing).max(wrap_bottom);
                     let object_req = if object_based > 0.0 {
                         object_based + pad_top + pad_bottom
                     } else {
@@ -2778,7 +2790,7 @@ impl HeightMeasurer {
                     text_height.max(object_req)
                 } else {
                     let content_height = (text_height + non_inline_h)
-                        .max(nested_bottom)
+                        .max(nested_with_trailing)
                         .max(wrap_bottom);
                     content_height + pad_top + pad_bottom
                 };
@@ -3251,7 +3263,13 @@ impl HeightMeasurer {
                         depth,
                         mc_cell_w,
                     );
-                    nested_bottom.max(mc.total_content_height)
+                    let nested_with_trailing = nested_bottom
+                        + crate::renderer::unaccounted_trailing_after_nested_table_px(
+                            &cell.paragraphs,
+                            nested_bottom,
+                            self.dpi,
+                        );
+                    nested_with_trailing.max(mc.total_content_height)
                 };
             }
         }

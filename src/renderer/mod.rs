@@ -1283,6 +1283,63 @@ pub(crate) fn cell_vpos_ladder_is_intact(
         .all(|(idx, para)| first_seg_vpos_is_anchor(para, idx))
 }
 
+/// 중첩 표 뒤에 이어지는 실제 글줄이 저장 vpos 사다리에 표 **아래**로 잡혀
+/// 있지 않은 높이(px).
+///
+/// 페인트는 블록 중첩 표 다음에 `para_y + nested_h` 로 후속 문단을 놓는다.
+/// 호스트 셀 높이를 `max(줄합, 중첩표바닥)` 으로만 잡으면 그 줄이 칸 밖으로
+/// 나가고, clip 이 하단 괘선에서 글리프 한가운데를 자른다. 사다리가 이미 표
+/// 바닥 너머로 그 줄을 예약했으면 0 이다.
+pub(crate) fn unaccounted_trailing_after_nested_table_px(
+    paragraphs: &[crate::model::paragraph::Paragraph],
+    nested_bottom_px: f64,
+    dpi: f64,
+) -> f64 {
+    let Some(last_table) = paragraphs.iter().rposition(|para| {
+        para.controls
+            .iter()
+            .any(|ctrl| matches!(ctrl, Control::Table(_)))
+    }) else {
+        return 0.0;
+    };
+    let trailing = &paragraphs[last_table + 1..];
+    if !trailing.iter().any(|para| !para.text.trim().is_empty()) {
+        return 0.0;
+    }
+
+    let trailing_ladder_end = trailing
+        .iter()
+        .flat_map(|para| para.line_segs.iter())
+        .map(|seg| hwpunit_to_px(seg.vertical_pos.saturating_add(seg.line_height), dpi))
+        .fold(0.0f64, f64::max);
+    let trailing_lines_h: f64 = trailing
+        .iter()
+        .map(|para| {
+            if para.line_segs.is_empty() {
+                if para.text.trim().is_empty() {
+                    0.0
+                } else {
+                    hwpunit_to_px(1000, dpi)
+                }
+            } else {
+                para.line_segs
+                    .iter()
+                    .map(|seg| hwpunit_to_px(seg.line_height, dpi))
+                    .sum()
+            }
+        })
+        .sum();
+    if trailing_lines_h <= 0.5 {
+        return 0.0;
+    }
+    let already_below = (trailing_ladder_end - nested_bottom_px).max(0.0);
+    if already_below + 0.5 >= trailing_lines_h {
+        0.0
+    } else {
+        trailing_lines_h - already_below
+    }
+}
+
 /// [#2287] 저장 LINE_SEG 없는 빈 anchor 문단의 TAC(글자처럼) 그림/도형 플로우
 /// 줄 메트릭 합성. 컨트롤 폭을 가용 폭에 greedy wrap 하여 줄별 (최대 높이, 0)
 /// 을 돌려준다.

@@ -115,7 +115,10 @@ fn build_collapsed_ladder_table() -> Table {
     }
 }
 
-fn measure_host_cell_height(table: Table) -> f64 {
+fn measure_host_table(
+    table: Table,
+    native_hwp5: bool,
+) -> rhwp::renderer::height_measurer::MeasuredTable {
     let host_para = Paragraph {
         controls: vec![Control::Table(Box::new(table))],
         ..Default::default()
@@ -125,13 +128,59 @@ fn measure_host_cell_height(table: Table) -> f64 {
 
     let doc = Document::default();
     let styles = resolve_styles_with_variant(&doc.doc_info, DEFAULT_DPI, false);
-    let measured =
-        HeightMeasurer::new(DEFAULT_DPI).measure_section(&paragraphs, &composed, &styles, None);
+    let measured = HeightMeasurer::new(DEFAULT_DPI)
+        .with_native_hwp5(native_hwp5)
+        .measure_section(&paragraphs, &composed, &styles, None);
 
-    let measured_table = measured.tables.first().expect("측정된 표");
+    measured.tables.first().expect("측정된 표").clone()
+}
+
+fn measure_host_cell_height(table: Table) -> f64 {
+    let measured_table = measure_host_table(table, false);
     let cell = measured_table.cells.first().expect("측정된 셀");
     assert!(cell.has_nested_table, "대상 셀은 중첩 표 호스트여야 한다");
     cell.total_content_height
+}
+
+/// 네이티브 HWP5에서 사다리는 온전하지만(후속 문단 vpos>0) 중첩 표 뒤 각주
+/// 줄이 표 바닥 너머로 예약되지 않은 셀 — 페인트는 표 뒤에 줄을 놓고 clip 이
+/// 하단 괘선으로 자른다.
+fn build_intact_ladder_trailing_footnote_table() -> Table {
+    let heading_h = TEXT_LH;
+    let nested_h = BIG_NESTED_H;
+    let mut nested_host = nested_host_para(nested_table(nested_h, "내부 표"), heading_h);
+    nested_host.line_segs[0].vertical_pos = heading_h;
+    let paragraphs = vec![
+        para("1. 신청자격", 0, heading_h),
+        nested_host,
+        // vpos>0 이라 사다리는 온전으로 보지만, 표 높이(30000) 아래에 있지 않다.
+        para(
+            "※ 소득 및 자산 산정방법에 대한 자세한 사항은 모집공고문 하단 첨부물 참고",
+            heading_h,
+            TEXT_LH,
+        ),
+    ];
+
+    let mut common = rhwp::model::shape::CommonObjAttr::default();
+    common.width = 60000;
+    common.height = (heading_h + nested_h) as u32;
+    Table {
+        row_count: 1,
+        col_count: 1,
+        cells: vec![Cell {
+            row: 0,
+            col: 0,
+            row_span: 1,
+            col_span: 1,
+            width: 60000_u32,
+            height: (heading_h + nested_h) as u32,
+            paragraphs,
+            ..Default::default()
+        }],
+        cell_grid: vec![Some(0)],
+        common,
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -165,5 +214,72 @@ fn absorbed_nested_table_is_not_counted_twice() {
         measured < double_counted - 1.0,
         "흡수된 중첩 표가 이중 계상됐다: 측정={measured:.1}px, \
          이중 계상 기준={double_counted:.1}px (흡수분 {small_nested:.1} 이 또 더해졌다)"
+    );
+}
+
+#[test]
+fn native_hwp5_intact_ladder_grows_for_trailing_text_after_nested_table() {
+    let measured = measure_host_table(build_intact_ladder_trailing_footnote_table(), true);
+    let nested = hwpunit_to_px(TEXT_LH + BIG_NESTED_H, DEFAULT_DPI);
+    let footnote = hwpunit_to_px(TEXT_LH, DEFAULT_DPI);
+    let expected_min = nested + footnote;
+
+    let row_h = *measured.row_heights.first().expect("행 높이");
+    assert!(
+        row_h >= expected_min - 1.0,
+        "중첩 표 뒤 각주 줄이 행 높이에 안 들어갔다: 행={row_h:.1}px, \
+         최소 기대={expected_min:.1}px (중첩 바닥 {nested:.1} + 각주 {footnote:.1})"
+    );
+
+    if let Some(cell) = measured.cells.first() {
+        assert!(
+            cell.total_content_height >= expected_min - 1.0,
+            "중첩 표 뒤 각주 줄이 셀 콘텐츠 높이에 안 들어갔다: \
+             측정={:.1}px, 최소 기대={expected_min:.1}px",
+            cell.total_content_height
+        );
+    }
+}
+
+#[test]
+fn trailing_already_below_nested_table_is_not_added_twice() {
+    let heading_h = TEXT_LH;
+    let nested_h = BIG_NESTED_H;
+    let mut nested_host = nested_host_para(nested_table(nested_h, "내부 표"), heading_h);
+    nested_host.line_segs[0].vertical_pos = heading_h;
+    let footnote_vpos = heading_h + nested_h;
+    let paragraphs = vec![
+        para("1. 신청자격", 0, heading_h),
+        nested_host,
+        para("※ 각주", footnote_vpos, TEXT_LH),
+    ];
+    let mut common = rhwp::model::shape::CommonObjAttr::default();
+    common.width = 60000;
+    common.height = (footnote_vpos + TEXT_LH) as u32;
+    let table = Table {
+        row_count: 1,
+        col_count: 1,
+        cells: vec![Cell {
+            row: 0,
+            col: 0,
+            row_span: 1,
+            col_span: 1,
+            width: 60000_u32,
+            height: (footnote_vpos + TEXT_LH) as u32,
+            paragraphs,
+            ..Default::default()
+        }],
+        cell_grid: vec![Some(0)],
+        common,
+        ..Default::default()
+    };
+
+    let measured = measure_host_table(table, true);
+    let row_h = *measured.row_heights.first().expect("행 높이");
+    let expected = hwpunit_to_px(footnote_vpos + TEXT_LH, DEFAULT_DPI);
+    assert!(
+        row_h < expected + hwpunit_to_px(TEXT_LH, DEFAULT_DPI) - 1.0,
+        "사다리가 이미 표 아래에 각주를 예약한 셀에 각주 높이가 한 번 더 더해졌다: \
+         행={row_h:.1}px, 예약={expected:.1}px"
     );
 }

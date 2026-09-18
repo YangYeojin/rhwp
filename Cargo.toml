@@ -224,6 +224,10 @@ path = "tests/overflow_cell_baseline.rs"
 
 # END RHWP GENERATED TEST TARGETS
 
+[[test]]
+name = "issue_3593_nested_host_cell_height"
+path = "tests/issue_3593_nested_host_cell_height.rs"
+
 [dependencies]
 rhwp-contracts = { path = "crates/rhwp-contracts" }
 rhwp-ooxml-chart = { path = "crates/rhwp-ooxml-chart" }
