@@ -2295,7 +2295,9 @@ impl LayoutEngine {
                                             .filter(|seg| seg.vertical_pos > 0)
                                             .map(|seg| hwpunit_to_px(seg.vertical_pos, self.dpi));
                                         if let Some(vpos_px) = stored_flow_vpos {
-                                            content_top + vpos_px + v_off
+                                            // 텍스트와 동일 기저(Center/Bottom text_y_start).
+                                            // Top 은 text_y_start == content_top.
+                                            text_y_start + vpos_px + v_off
                                         } else {
                                             match effective_align {
                                                 VerticalAlign::Top => content_top + v_off,

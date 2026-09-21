@@ -5971,7 +5971,17 @@ impl LayoutEngine {
                                         .unwrap_or(0.0);
                                     base + vpos_px + v_off
                                 } else if let Some(vpos_px) = stored_flow_vpos {
-                                    content_top + vpos_px + v_off
+                                    // 텍스트 문단과 같은 기저. Center/Bottom 셀은
+                                    // text_y_start 에 valign offset 이 들어 있고,
+                                    // Top+vpos 앵커는 content_top 절대 사다리를 쓴다
+                                    // (다수인증 양식 p14: 단일 float 가 content_top 만
+                                    // 쓰면 ☞ 세 번째 줄을 덮음).
+                                    let flow_base = if use_top_vpos_anchor {
+                                        content_top
+                                    } else {
+                                        text_y_start
+                                    };
+                                    flow_base + vpos_px + v_off
                                 } else {
                                     match effective_valign {
                                         VerticalAlign::Top => content_top + v_off,
