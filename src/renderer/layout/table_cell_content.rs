@@ -6,8 +6,8 @@ use super::super::render_tree::*;
 use super::super::style_resolver::ResolvedStyleSet;
 use super::super::{hwpunit_to_px, ShapeStyle, TextStyle};
 use super::border_rendering::{
-    build_row_col_x, collect_cell_borders, mark_cell_span_interior_covered, render_edge_borders,
-    render_transparent_borders,
+    build_row_col_x, clear_covered_span_edges, collect_cell_borders,
+    mark_cell_span_interior_covered, render_edge_borders, render_transparent_borders,
 };
 use super::text_measurement::{
     is_cjk_char, is_vertical_rotate_char, resolved_to_text_style, vertical_substitute_char,
@@ -1274,6 +1274,12 @@ impl LayoutEngine {
         }
 
         // 엣지 기반 테두리 렌더링
+        clear_covered_span_edges(
+            &mut h_edges,
+            &mut v_edges,
+            &h_span_covered,
+            &v_span_covered,
+        );
         table_node.children.extend(render_edge_borders(
             tree, &h_edges, &v_edges, &row_col_x, &row_y, table_x, table_y, None,
         ));

@@ -62,6 +62,41 @@ fn merge_border(a: &BorderLine, b: &BorderLine) -> BorderLine {
     }
 }
 
+/// rowspan/colspan 내부 슬롯에 남아 있는 실제 괘선을 지운다.
+///
+/// `mark_cell_span_interior_covered` 는 투명 가이드 전용이었고, 다른 칸이
+/// 병합 영역 안쪽 경계를 다시 쓰면 그대로 그려졌다(설명칸 행 경계가 총자산
+/// 열까지 뚫거나, 가로병합 칸 안에 세로 토막이 남는 증상).
+pub(crate) fn clear_covered_span_edges(
+    h_edges: &mut [Vec<Option<BorderLine>>],
+    v_edges: &mut [Vec<Option<BorderLine>>],
+    h_covered: &[Vec<bool>],
+    v_covered: &[Vec<bool>],
+) {
+    for (ri, row) in h_edges.iter_mut().enumerate() {
+        for (ci, slot) in row.iter_mut().enumerate() {
+            if h_covered
+                .get(ri)
+                .and_then(|r| r.get(ci).copied())
+                .unwrap_or(false)
+            {
+                *slot = None;
+            }
+        }
+    }
+    for (ci, col) in v_edges.iter_mut().enumerate() {
+        for (ri, slot) in col.iter_mut().enumerate() {
+            if v_covered
+                .get(ci)
+                .and_then(|c| c.get(ri).copied())
+                .unwrap_or(false)
+            {
+                *slot = None;
+            }
+        }
+    }
+}
+
 /// 병합/숨김 등으로 편집된 셀의 span 내부 위치를 "이미 처리됨"으로 표시한다.
 /// h_edges/v_edges 그리드는 각 셀의 자기 span 경계에만 채워지므로, 병합된 셀 내부의
 /// 미기록 슬롯(`None`)은 "실제로 선이 없음"과 "병합으로 사라진 경계"를 구분하지 못한다.

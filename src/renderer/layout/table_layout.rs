@@ -210,9 +210,9 @@ fn stored_layout_relocated_empty_rowbreak_picture_resets_offset(
 use super::super::composer::effective_text_for_metrics;
 use super::super::{hwpunit_to_px, ShapeStyle};
 use super::border_rendering::{
-    apply_table_outer_border_fill, build_row_col_x, collect_cell_borders, create_border_line_nodes,
-    mark_cell_span_interior_covered, render_cell_diagonal, render_edge_borders,
-    render_transparent_borders,
+    apply_table_outer_border_fill, build_row_col_x, clear_covered_span_edges, collect_cell_borders,
+    create_border_line_nodes, mark_cell_span_interior_covered, render_cell_diagonal,
+    render_edge_borders, render_transparent_borders,
 };
 use super::text_measurement::{estimate_text_width, resolved_to_text_style};
 use super::utils::find_bin_data_bytes;
@@ -1110,6 +1110,11 @@ fn extend_table_bottom_to_direct_cell_text_overflow(table_node: &mut RenderNode)
             }
             // B) 셀 안(또는 바로 위) 가로 괘선을 글줄이 가로지름 — clip 만 먼저
             // 늘어나고 밑줄이 남은 경우 포함.
+            // 옆 칸(같은 y의 다른 열 구간) 중간 가로줄은 이 셀과 가로로
+            // 겹치지 않으므로 제외한다. 그렇지 않으면 rowspan 라벨이 설명칸
+            // 행 경계 줄을 "넘침"으로 오인해 칸·괘선이 어긋난다.
+            let cell_left = child.bbox.x;
+            let cell_right = cell_left + child.bbox.width;
             for edge in &table_node.children {
                 let RenderNodeType::Line(border) = &edge.node_type else {
                     continue;
@@ -1118,6 +1123,13 @@ fn extend_table_bottom_to_direct_cell_text_overflow(table_node: &mut RenderNode)
                     continue;
                 }
                 let by = border.y1;
+                let edge_left = border.x1.min(border.x2);
+                let edge_right = border.x1.max(border.x2);
+                if edge_right <= cell_left + TABLE_BOTTOM_EDGE_MATCH_PX
+                    || edge_left >= cell_right - TABLE_BOTTOM_EDGE_MATCH_PX
+                {
+                    continue;
+                }
                 if by <= cell_top + TABLE_BOTTOM_EDGE_MATCH_PX {
                     continue;
                 }
@@ -3319,6 +3331,12 @@ impl LayoutEngine {
 
         // ── 6. 테두리 렌더링 ──
         if independent_col_row_y.is_none() {
+            clear_covered_span_edges(
+                &mut h_edges,
+                &mut v_edges,
+                &h_span_covered,
+                &v_span_covered,
+            );
             let body_top_clip = (depth == 0
                 && self.is_body_flow_col_area(col_area)
                 && (table_y - col_area.y).abs() <= 0.5)
@@ -17576,6 +17594,55 @@ mod trailing_text_overflow_tests {
             panic!("expected seam");
         };
         assert!((seam.y1 - 493.3).abs() < 0.01, "seam y {}", seam.y1);
+    }
+
+    #[test]
+    fn extend_table_bottom_ignores_neighbor_column_mid_seam() {
+        // rowspan 라벨(좌) 글자가 설명칸(우) 행 경계 가로줄만 가로질러도
+        // 넘침으로 보지 않는다.
+        let mut table = RenderNode::new(
+            1,
+            RenderNodeType::Table(TableNode {
+                row_count: 2,
+                col_count: 2,
+                border_fill_id: 0,
+                section_index: None,
+                para_index: None,
+                control_index: None,
+                cell_context: None,
+            }),
+            BoundingBox::new(90.0, 879.0, 450.0, 49.3),
+        );
+        let mut label = cell_node(false, false, BoundingBox::new(90.0, 879.0, 115.0, 49.3));
+        label.children.push(text_line(2, 897.0, 13.3));
+        let upper = cell_node(false, false, BoundingBox::new(206.0, 879.0, 328.0, 24.6));
+        let lower = cell_node(false, false, BoundingBox::new(206.0, 903.6, 328.0, 24.6));
+        table.children.push(label);
+        table.children.push(upper);
+        table.children.push(lower);
+        // 설명칸만 가로지르는 행 경계
+        table.children.push(line_node(4, 206.0, 903.6, 534.0, 903.6));
+
+        extend_table_bottom_to_direct_cell_text_overflow(&mut table);
+
+        assert!(
+            (table.children[1].bbox.height - 24.6).abs() < 0.01,
+            "desc upper height must stay declared, got {}",
+            table.children[1].bbox.height
+        );
+        assert!(
+            (table.children[2].bbox.y - 903.6).abs() < 0.01,
+            "desc lower y must stay, got {}",
+            table.children[2].bbox.y
+        );
+        let RenderNodeType::Line(seam) = &table.children[3].node_type else {
+            panic!("expected seam");
+        };
+        assert!(
+            (seam.y1 - 903.6).abs() < 0.01,
+            "neighbor mid seam must not move, got {}",
+            seam.y1
+        );
     }
 
     #[test]

@@ -8,8 +8,8 @@ use super::super::render_tree::*;
 use super::super::style_resolver::ResolvedStyleSet;
 use super::super::{hwpunit_to_px, px_to_hwpunit};
 use super::border_rendering::{
-    build_row_col_x, collect_cell_borders, mark_cell_span_interior_covered, render_edge_borders,
-    render_transparent_borders,
+    build_row_col_x, clear_covered_span_edges, collect_cell_borders,
+    mark_cell_span_interior_covered, render_edge_borders, render_transparent_borders,
 };
 use super::table_layout::{
     calc_nested_split_rows, effective_margin_left_line, extend_completed_nested_table_border_clips,
@@ -3799,6 +3799,12 @@ impl LayoutEngine {
         };
 
         // 엣지 기반 테두리 렌더링
+        clear_covered_span_edges(
+            &mut h_edges,
+            &mut v_edges,
+            &h_span_covered,
+            &v_span_covered,
+        );
         let body_top_clip = (enclosing_cell_ctx.is_none()
             && self.is_body_flow_col_area(col_area)
             && (table_y - col_area.y).abs() <= 0.5)
