@@ -62,11 +62,7 @@ fn merge_border(a: &BorderLine, b: &BorderLine) -> BorderLine {
     }
 }
 
-/// rowspan/colspan 내부 슬롯에 남아 있는 실제 괘선을 지운다.
-///
-/// `mark_cell_span_interior_covered` 는 투명 가이드 전용이었고, 다른 칸이
-/// 병합 영역 안쪽 경계를 다시 쓰면 그대로 그려졌다(설명칸 행 경계가 총자산
-/// 열까지 뚫거나, 가로병합 칸 안에 세로 토막이 남는 증상).
+/// 병합 영역 안쪽에 남은 괘선을 지운다.
 pub(crate) fn clear_covered_span_edges(
     h_edges: &mut [Vec<Option<BorderLine>>],
     v_edges: &mut [Vec<Option<BorderLine>>],

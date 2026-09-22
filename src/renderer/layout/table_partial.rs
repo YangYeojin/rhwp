@@ -2295,8 +2295,7 @@ impl LayoutEngine {
                                             .filter(|seg| seg.vertical_pos > 0)
                                             .map(|seg| hwpunit_to_px(seg.vertical_pos, self.dpi));
                                         if let Some(vpos_px) = stored_flow_vpos {
-                                            // 텍스트와 동일 기저(Center/Bottom text_y_start).
-                                            // Top 은 text_y_start == content_top.
+                                            // Center/Bottom 은 text_y_start, Top 은 content_top.
                                             text_y_start + vpos_px + v_off
                                         } else {
                                             match effective_align {
@@ -3527,7 +3526,10 @@ impl LayoutEngine {
         // fragment-local row height다.
         if let Some(limit) = start_row_height_override {
             if start_row < row_count {
-                row_heights[start_row] = limit.max(0.0);
+                let passed = limit.max(0.0);
+                let content = row_heights[start_row];
+                // 전달 높이와 이 조각 내용 중 큰 값을 행 높이로 쓴다.
+                row_heights[start_row] = content.max(passed);
             }
         }
         if let Some(limit) = end_row_height_override {
@@ -3801,8 +3803,7 @@ impl LayoutEngine {
         };
 
         // 엣지 기반 테두리 렌더링
-        // 병합 내부 실선은 먼저 지우고, 쪽 나눔으로 길어진 셀의 바깥 변은
-        // `repair_unframed_table_cell_borders` 가 보강한다.
+        // 병합 내부 슬롯을 지운 뒤 실선을 그린다.
         clear_covered_span_edges(
             &mut h_edges,
             &mut v_edges,
@@ -3844,11 +3845,11 @@ impl LayoutEngine {
         extend_completed_nested_table_border_clips(
             tree,
             &mut table_node,
+            Some(col_area.y + col_area.height),
             self.profile.get().hwp5_stored_pagination_layout()
                 || self.profile.get().hwp5_origin_hwpx(),
             self.profile.get().hwpx_container(),
         );
-        super::table_layout::clip_horizontals_crossing_cell_interiors(tree, &mut table_node);
         super::table_layout::repair_unframed_table_cell_borders(tree, &mut table_node, styles);
 
         // [Task #1860/#3820] 노드-자식 포섭 불변: 분할 표 조각의 셀 내 절대위치 shape
@@ -3950,6 +3951,9 @@ impl LayoutEngine {
                 table_node.bbox.height = grown;
             }
         }
+
+        // 커진 조각 bbox 를 흐름 높이에 반영한다.
+        let partial_table_height = table_node.bbox.height.max(partial_table_height);
 
         col_node.children.push(table_node);
 

@@ -21099,10 +21099,14 @@ impl TypesetEngine {
             // 물리 높이만 소비한 뒤 다음 행의 정상 스캔으로 이어 간다.
             if r == cursor_row {
                 if let Some(height) = start_row_height_override {
-                    consumed += height;
-                    r += 1;
-                    end_row = r;
-                    continue;
+                    let room = (avail_for_rows - consumed).max(0.0);
+                    // 빈 tail 은 높이만 소비한다. 내용이 쪽보다 길면 행 분할로 넘긴다.
+                    if start_cut.is_empty() || height <= room + 0.5 {
+                        consumed += height;
+                        r += 1;
+                        end_row = r;
+                        continue;
+                    }
                 }
             }
             // rowspan 보호 블록 — 블록 전체를 분할 없이 한 단위로.
@@ -25006,13 +25010,28 @@ impl TypesetEngine {
             let cursor_row = continuation.row;
             let is_continuation = continuation.is_continuation;
             let start_cut_is_block = continuation.start_cut_is_block;
-            let start_row_height_override = continuation.start_row_height_override;
+            let mut start_row_height_override = continuation.start_row_height_override;
             // `register_queued_table_footnotes` can advance the continuation while
             // the rest of this iteration still needs the original cut geometry.
             // Keep that geometry as a local value rather than borrowing the cursor
             // across the terminal-fragment queue registration.
             let start_cut = continuation.start_cut.clone();
             let fragment_starts_intra_row = start_cut_is_block || !start_cut.is_empty();
+            // 이 조각 글줄이 전달 tail 보다 길면 그 길이를 행 높이로 쓴다.
+            if !start_cut_is_block && !start_cut.is_empty() {
+                if let Some(height) = start_row_height_override {
+                    let content_h = layout_engine.row_cut_content_height(
+                        row_geometry_table,
+                        cursor_row,
+                        &start_cut,
+                        &[],
+                        styles,
+                    );
+                    if content_h > height + 0.5 {
+                        start_row_height_override = Some(content_h);
+                    }
+                }
+            }
             // 이전 분할에서 모든 콘텐츠가 소진된 행은 건너뜀.
             // [Task #1025] 블록 컷(start_cut_is_block)은 per-row(row_span==1) 컷이 아니라
             // 블록-셀 인덱스다. advance_row_cut(per-row)로 판정하면 블록 첫 행이 소진돼도

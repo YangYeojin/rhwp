@@ -1297,7 +1297,6 @@ impl LayoutEngine {
             ));
         }
 
-        super::table_layout::clip_horizontals_crossing_cell_interiors(tree, &mut table_node);
         super::table_layout::repair_unframed_table_cell_borders(tree, &mut table_node, styles);
         parent.children.push(table_node);
         table_y + table_height

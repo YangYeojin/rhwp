@@ -1062,11 +1062,15 @@ fn expand_page_fragment_clip_to_own_text_lines(node: &mut RenderNode, page_botto
     }
 }
 
-/// 직계 글줄이 행 경계·표 밑줄을 조금 넘기면 그 행/밑줄을 한 줄 남짓 늘린다.
+/// 직계 글줄이 행 경계·표 밑줄을 넘기면 그 행/밑줄을 늘린다.
+/// `max_bottom` 이 있으면 그 안까지, 없으면 24px 까지.
 const DIRECT_TEXT_OVERFLOW_GROW_CAP_PX: f64 = 24.0;
 const TABLE_BOTTOM_EDGE_MATCH_PX: f64 = 2.0;
 
-fn extend_table_bottom_to_direct_cell_text_overflow(table_node: &mut RenderNode) {
+fn extend_table_bottom_to_direct_cell_text_overflow(
+    table_node: &mut RenderNode,
+    max_bottom: Option<f64>,
+) {
     if !matches!(table_node.node_type, RenderNodeType::Table(_)) {
         return;
     }
@@ -1078,7 +1082,15 @@ fn extend_table_bottom_to_direct_cell_text_overflow(table_node: &mut RenderNode)
         if needed <= seam + NESTED_FRAGMENT_EDGE_EPSILON_PX {
             return;
         }
-        let needed = needed.min(seam + DIRECT_TEXT_OVERFLOW_GROW_CAP_PX);
+        let mut needed = needed;
+        if let Some(max_b) = max_bottom {
+            needed = needed.min(max_b);
+        } else {
+            needed = needed.min(seam + DIRECT_TEXT_OVERFLOW_GROW_CAP_PX);
+        }
+        if needed <= seam + NESTED_FRAGMENT_EDGE_EPSILON_PX {
+            return;
+        }
         if let Some(entry) = seams
             .iter_mut()
             .find(|(y, _)| (*y - seam).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX)
@@ -1110,9 +1122,7 @@ fn extend_table_bottom_to_direct_cell_text_overflow(table_node: &mut RenderNode)
             }
             // B) 셀 안(또는 바로 위) 가로 괘선을 글줄이 가로지름 — clip 만 먼저
             // 늘어나고 밑줄이 남은 경우 포함.
-            // 옆 칸(같은 y의 다른 열 구간) 중간 가로줄은 이 셀과 가로로
-            // 겹치지 않으므로 제외한다. 그렇지 않으면 rowspan 라벨이 설명칸
-            // 행 경계 줄을 "넘침"으로 오인해 칸·괘선이 어긋난다.
+            // 이 칸과 가로로 겹치지 않는 옆 칸 가로줄은 제외한다.
             let cell_left = child.bbox.x;
             let cell_right = cell_left + child.bbox.width;
             for edge in &table_node.children {
@@ -1150,6 +1160,7 @@ fn extend_table_bottom_to_direct_cell_text_overflow(table_node: &mut RenderNode)
         }
     }
     if seam_needs.is_empty() {
+        unify_same_top_row_cell_heights_and_seams(table_node, max_bottom);
         return;
     }
     seam_needs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -1260,6 +1271,184 @@ fn extend_table_bottom_to_direct_cell_text_overflow(table_node: &mut RenderNode)
         }
     }
     table_node.bbox.height = content_bottom.max(old_table_bottom) - table_top;
+
+    unify_same_top_row_cell_heights_and_seams(table_node, max_bottom);
+}
+
+/// 같은 top 의 단일 칸 높이를 맞추고, 그 차이만큼 아래 행·괘선을 민다.
+/// `max_bottom` 을 넘기지 않는다.
+fn table_cell_row_span(node: &RenderNode) -> u16 {
+    match &node.node_type {
+        RenderNodeType::TableCell(cell) => cell.row_span.max(1),
+        _ => 1,
+    }
+}
+
+fn unify_same_top_row_cell_heights_and_seams(
+    table_node: &mut RenderNode,
+    max_bottom: Option<f64>,
+) {
+    if !matches!(table_node.node_type, RenderNodeType::Table(_)) {
+        return;
+    }
+
+    let mut groups: Vec<(f64, f64, f64)> = Vec::new(); // top, min_bottom, max_bottom
+    for child in &table_node.children {
+        if !matches!(child.node_type, RenderNodeType::TableCell(_)) {
+            continue;
+        }
+        // 행 병합 칸은 같은 top 높이 그룹에서 뺀다.
+        if table_cell_row_span(child) > 1 {
+            continue;
+        }
+        let top = child.bbox.y;
+        let bottom = top + child.bbox.height;
+        if let Some(entry) = groups
+            .iter_mut()
+            .find(|(t, _, _)| (*t - top).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX)
+        {
+            entry.0 = entry.0.min(top);
+            entry.1 = entry.1.min(bottom);
+            entry.2 = entry.2.max(bottom);
+        } else {
+            groups.push((top, bottom, bottom));
+        }
+    }
+    if groups.is_empty() {
+        return;
+    }
+    groups.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut cumulative = 0.0_f64;
+    for (top0, min_b0, max_b0) in groups {
+        let top = top0 + cumulative;
+        let min_b = min_b0 + cumulative;
+        let unclamped_max = max_b0 + cumulative;
+        let mut max_b = unclamped_max;
+        if let Some(mb) = max_bottom {
+            max_b = max_b.min(mb);
+        }
+        let mut delta = max_b - min_b;
+        // 아래 행 이동이 쪽 하단을 넘으면 그만큼만 줄인다.
+        if delta > NESTED_FRAGMENT_EDGE_EPSILON_PX {
+            if let Some(mb) = max_bottom {
+                let mut shift_bottom = max_b;
+                for child in &table_node.children {
+                    if !matches!(child.node_type, RenderNodeType::TableCell(_)) {
+                        continue;
+                    }
+                    let cell_top = child.bbox.y;
+                    if cell_top >= min_b - TABLE_BOTTOM_EDGE_MATCH_PX
+                        && (cell_top - top).abs() > TABLE_BOTTOM_EDGE_MATCH_PX
+                    {
+                        shift_bottom = shift_bottom.max(cell_top + child.bbox.height + delta);
+                    }
+                }
+                if shift_bottom > mb {
+                    delta = (delta - (shift_bottom - mb)).max(0.0);
+                    max_b = min_b + delta;
+                }
+            }
+        }
+        if delta <= NESTED_FRAGMENT_EDGE_EPSILON_PX {
+            if max_b + NESTED_FRAGMENT_EDGE_EPSILON_PX < min_b {
+                continue;
+            }
+            // 가로선을 통일 바닥에 맞춘다. 긴 칸은 줄이지 않는다.
+            for child in &mut table_node.children {
+                if !matches!(child.node_type, RenderNodeType::TableCell(_)) {
+                    continue;
+                }
+                if (child.bbox.y - top).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX
+                    && table_cell_row_span(child) <= 1
+                {
+                    child.bbox.height = child.bbox.height.max(max_b - child.bbox.y);
+                }
+            }
+            continue;
+        }
+
+        for child in &mut table_node.children {
+            if matches!(child.node_type, RenderNodeType::TableCell(_)) {
+                let cell_top = child.bbox.y;
+                if (cell_top - top).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX {
+                    if table_cell_row_span(child) <= 1 {
+                        // 짧은 칸만 키운다.
+                        child.bbox.height = child.bbox.height.max(max_b - cell_top);
+                    } else {
+                        // 병합 칸은 delta 만큼만 늘린다.
+                        child.bbox.height += delta;
+                    }
+                } else if cell_top >= min_b - TABLE_BOTTOM_EDGE_MATCH_PX {
+                    translate_render_subtree_y(child, delta);
+                }
+                continue;
+            }
+            let RenderNodeType::Line(line) = &mut child.node_type else {
+                continue;
+            };
+            let horizontal = (line.y1 - line.y2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+            let vertical = (line.x1 - line.x2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+            if horizontal {
+                let y = line.y1;
+                if y > top + TABLE_BOTTOM_EDGE_MATCH_PX
+                    && y <= unclamped_max + TABLE_BOTTOM_EDGE_MATCH_PX
+                {
+                    // 이 행 구간의 가로선을 통일 바닥으로.
+                    line.y1 = max_b;
+                    line.y2 = max_b;
+                } else if y > unclamped_max + TABLE_BOTTOM_EDGE_MATCH_PX {
+                    line.y1 += delta;
+                    line.y2 += delta;
+                } else {
+                    continue;
+                }
+            } else if vertical {
+                let y_lo = line.y1.min(line.y2);
+                let y_hi = line.y1.max(line.y2);
+                if (y_hi - min_b).abs() <= TABLE_BOTTOM_EDGE_MATCH_PX {
+                    if line.y1 >= line.y2 {
+                        line.y1 = max_b;
+                    } else {
+                        line.y2 = max_b;
+                    }
+                } else if y_lo >= min_b - TABLE_BOTTOM_EDGE_MATCH_PX {
+                    line.y1 += delta;
+                    line.y2 += delta;
+                } else if y_lo < min_b && y_hi > min_b {
+                    // 세로선을 통일 바닥까지 늘린다.
+                    if line.y1 >= line.y2 {
+                        line.y1 = line.y1.max(max_b);
+                    } else {
+                        line.y2 = line.y2.max(max_b);
+                    }
+                } else {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+            let ink = line.ink_bbox();
+            child.bbox = BoundingBox::new(
+                ink.x,
+                ink.y,
+                ink.width.max(NESTED_FRAGMENT_EDGE_EPSILON_PX),
+                ink.height.max(NESTED_FRAGMENT_EDGE_EPSILON_PX),
+            );
+        }
+        cumulative += delta;
+    }
+
+    let table_top = table_node.bbox.y;
+    let mut content_bottom = table_top;
+    for child in &table_node.children {
+        if matches!(child.node_type, RenderNodeType::TableCell(_)) {
+            content_bottom = content_bottom.max(child.bbox.y + child.bbox.height);
+        } else if let RenderNodeType::Line(line) = &child.node_type {
+            content_bottom = content_bottom.max(line.y1.max(line.y2));
+        }
+    }
+    table_node.bbox.height = content_bottom.max(table_node.bbox.height) - table_top;
 }
 
 /// Repair the frame and source-flow seam of a true nested-table continuation.
@@ -1516,6 +1705,7 @@ fn repair_clipped_nested_table_fragment_frame(
 pub(super) fn extend_completed_nested_table_border_clips(
     tree: &mut PageLayoutContext,
     node: &mut RenderNode,
+    max_bottom: Option<f64>,
     suppress_bottom_text_residue: bool,
     repair_unclipped_hwpx_top_residue: bool,
 ) {
@@ -1523,12 +1713,13 @@ pub(super) fn extend_completed_nested_table_border_clips(
         extend_completed_nested_table_border_clips(
             tree,
             child,
+            max_bottom,
             suppress_bottom_text_residue,
             repair_unclipped_hwpx_top_residue,
         );
     }
     extend_table_horizontal_bbox_to_direct_cell_paint(node);
-    extend_table_bottom_to_direct_cell_text_overflow(node);
+    extend_table_bottom_to_direct_cell_text_overflow(node, max_bottom);
     extend_clipped_cell_horizontal_clip_to_nested_table_borders(node);
     extend_clipped_cell_vertical_clip_to_nearby_nested_table_borders(node);
     repair_clipped_nested_table_fragment_frame(
@@ -1611,12 +1802,6 @@ fn build_col_row_y_from_cell_heights(
     }
 
     let fallback_h = hwpunit_to_px(400, dpi);
-    let target_total = if table.common.height > 0 {
-        hwpunit_to_px(table.common.height as i32, dpi)
-            + cell_spacing * row_count.saturating_sub(1) as f64
-    } else {
-        row_y.last().copied().unwrap_or(0.0)
-    };
     let mut col_row_y = vec![vec![0.0f64; row_count + 1]; col_count];
     for c in 0..col_count {
         let col_idx = c as u16;
@@ -1631,18 +1816,11 @@ fn build_col_row_y_from_cell_heights(
             col_row_y[c][r + 1] =
                 col_row_y[c][r] + h + if r + 1 < row_count { cell_spacing } else { 0.0 };
         }
-        // 저장 파일의 cell.height는 표 전체 높이와 맞지 않는 보조값일 수 있다.
-        // 열별 누적 높이가 표 외곽과 맞을 때만 독립 horizontal segment로 해석한다.
-        // A Shift-style vertical resize publishes one complete independent
-        // column of absolute height hints. Balanced row resize touches several
-        // columns and must keep the shared row grid even if some source columns
-        // happen to have complete historical hints.
+        // 독립 열 높이 힌트가 한 열로 완결될 때만 열별 y 를 쓴다.
+        // 여러 열이면 공유 행 격자를 유지한다.
         let complete_independent_column =
             table.local_resize_cols.len() == 1 && cell_height_grid[c].iter().all(Option::is_some);
-        if !complete_independent_column
-            && (col_row_y[c][row_count] - target_total).abs() > 0.5
-            && row_y.len() == row_count + 1
-        {
+        if !complete_independent_column {
             col_row_y[c].clone_from_slice(row_y);
         }
     }
@@ -1701,146 +1879,7 @@ fn render_cell_box_borders(
     nodes
 }
 
-/// 셀 bbox 내부를 가로지르는 가로 괘선 구간을 잘라낸다.
-///
-/// 행 높이 비대칭(한 칸만 길게)일 때 짧은 칸의 바닥선이 긴 칸 글줄 한가운데를
-/// 가로지르는 유령 선이 된다(ISMS 8.2.5 운영현황). 셀 top/bottom 경계선은
-/// 남기고, 엄밀한 내부만 구멍 낸다.
-pub(super) fn clip_horizontals_crossing_cell_interiors(
-    tree: &mut PageLayoutContext,
-    table_node: &mut RenderNode,
-) {
-    if !matches!(table_node.node_type, RenderNodeType::Table(_)) {
-        return;
-    }
-    const EDGE_MATCH_PX: f64 = 1.5;
-    let cells: Vec<(f64, f64, f64, f64)> = table_node
-        .children
-        .iter()
-        .filter(|c| matches!(c.node_type, RenderNodeType::TableCell(_)))
-        .map(|c| {
-            (
-                c.bbox.x,
-                c.bbox.y,
-                c.bbox.x + c.bbox.width,
-                c.bbox.y + c.bbox.height,
-            )
-        })
-        .filter(|(_, t, _, b)| *b - *t > EDGE_MATCH_PX * 2.0)
-        .collect();
-    if cells.is_empty() {
-        return;
-    }
-
-    let mut extras: Vec<RenderNode> = Vec::new();
-    let mut hide: Vec<usize> = Vec::new();
-
-    for (idx, child) in table_node.children.iter_mut().enumerate() {
-        let RenderNodeType::Line(line) = &mut child.node_type else {
-            continue;
-        };
-        if !child.visible {
-            continue;
-        }
-        if (line.y1 - line.y2).abs() > NESTED_FRAGMENT_EDGE_EPSILON_PX {
-            continue;
-        }
-        let y = line.y1;
-        let mut x_lo = line.x1.min(line.x2);
-        let mut x_hi = line.x1.max(line.x2);
-        if x_hi - x_lo <= EDGE_MATCH_PX {
-            continue;
-        }
-
-        let mut cuts: Vec<(f64, f64)> = Vec::new();
-        for &(cl, ct, cr, cb) in &cells {
-            if y <= ct + EDGE_MATCH_PX || y >= cb - EDGE_MATCH_PX {
-                continue;
-            }
-            let a = x_lo.max(cl);
-            let b = x_hi.min(cr);
-            if b - a > EDGE_MATCH_PX {
-                cuts.push((a, b));
-            }
-        }
-        if cuts.is_empty() {
-            continue;
-        }
-        cuts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        let mut merged: Vec<(f64, f64)> = Vec::new();
-        for (a, b) in cuts {
-            if let Some(last) = merged.last_mut() {
-                if a <= last.1 + EDGE_MATCH_PX {
-                    last.1 = last.1.max(b);
-                    continue;
-                }
-            }
-            merged.push((a, b));
-        }
-
-        let mut segs: Vec<(f64, f64)> = Vec::new();
-        let mut cursor = x_lo;
-        for (a, b) in merged {
-            if a - cursor > EDGE_MATCH_PX {
-                segs.push((cursor, a));
-            }
-            cursor = cursor.max(b);
-        }
-        if x_hi - cursor > EDGE_MATCH_PX {
-            segs.push((cursor, x_hi));
-        }
-
-        if segs.is_empty() {
-            hide.push(idx);
-            continue;
-        }
-        let style = line.style.clone();
-        let (s0, e0) = segs[0];
-        line.x1 = s0;
-        line.x2 = e0;
-        line.y1 = y;
-        line.y2 = y;
-        child.bbox.x = s0.min(e0);
-        child.bbox.y = y - style.width.max(0.5) / 2.0;
-        child.bbox.width = (e0 - s0).abs();
-        child.bbox.height = style.width.max(0.5);
-        for &(s, e) in &segs[1..] {
-            let mut node = LineNode::new(s, y, e, y, style.clone());
-            node.section_index = line.section_index;
-            node.para_index = line.para_index;
-            node.control_index = line.control_index;
-            node.cell_index = line.cell_index;
-            node.cell_para_index = line.cell_para_index;
-            node.outer_table_control_index = line.outer_table_control_index;
-            let ink_h = style.width.max(0.5);
-            extras.push(RenderNode::new(
-                tree.next_id(),
-                RenderNodeType::Line(node),
-                BoundingBox {
-                    x: s.min(e),
-                    y: y - ink_h / 2.0,
-                    width: (e - s).abs(),
-                    height: ink_h,
-                },
-            ));
-        }
-    }
-
-    for idx in hide.into_iter().rev() {
-        table_node.children[idx].visible = false;
-    }
-    table_node.children.extend(extras);
-}
-
-/// 엣지 그리드 테두리가 셀 bbox를 충분히 덮지 못하면 셀 상자 기준으로 보강한다.
-///
-/// 쪽 나눔·행 높이 비대칭 확장 후 그리드 슬롯과 셀 높이가 어긋나면 세로 괘선이
-/// 빠지고, `clear_covered_span_edges` 가 병합 내부 가로선을 지운 뒤에도 바닥선이
-/// 셀 bbox까지 따라오지 않을 수 있다(ISMS 17쪽 8.2.5).
-///
-/// - 세로: 왼쪽/오른쪽 덮임이 높이의 절반 미만이면 보강
-/// - 가로: **세로 보강이 필요한 셀의 바닥만** 보강 (천장·단독 가로는
-///   짧은 유령 선을 만들기 쉬워 넣지 않음)
+/// 그리드가 셀 세로변을 절반 미만으로 덮으면 그 변을 셀 bbox 로 보강한다.
 pub(super) fn repair_unframed_table_cell_borders(
     tree: &mut PageLayoutContext,
     table_node: &mut RenderNode,
@@ -1870,11 +1909,11 @@ pub(super) fn repair_unframed_table_cell_borders(
         let cell_bottom = cell_top + child.bbox.height;
         let cell_left = child.bbox.x;
         let cell_right = cell_left + child.bbox.width;
-        if child.bbox.height <= EDGE_MATCH_PX || child.bbox.width <= EDGE_MATCH_PX {
+        if child.bbox.height <= EDGE_MATCH_PX {
             continue;
         }
 
-        let covered_v = |target_x: f64| -> f64 {
+        let covered = |target_x: f64| -> f64 {
             let mut total = 0.0_f64;
             for edge in &table_node.children {
                 let RenderNodeType::Line(line) = &edge.node_type else {
@@ -1893,34 +1932,11 @@ pub(super) fn repair_unframed_table_cell_borders(
             }
             total
         };
-        let covered_h = |target_y: f64| -> f64 {
-            let mut total = 0.0_f64;
-            for edge in &table_node.children {
-                let RenderNodeType::Line(line) = &edge.node_type else {
-                    continue;
-                };
-                if (line.y1 - line.y2).abs() > NESTED_FRAGMENT_EDGE_EPSILON_PX {
-                    continue;
-                }
-                if (line.y1 - target_y).abs() > EDGE_MATCH_PX {
-                    continue;
-                }
-                let x_lo = line.x1.min(line.x2);
-                let x_hi = line.x1.max(line.x2);
-                let overlap = (x_hi.min(cell_right) - x_lo.max(cell_left)).max(0.0);
-                total += overlap;
-            }
-            total
-        };
 
-        let min_v = child.bbox.height * 0.5;
-        let min_h = child.bbox.width * 0.5;
-        let need_left = covered_v(cell_left) < min_v;
-        let need_right = covered_v(cell_right) < min_v;
-        // 가로는 세로가 비는 "높이 어긋남" 케이스에만 바닥을 보강한다.
-        let need_bottom =
-            (need_left || need_right) && covered_h(cell_bottom) < min_h;
-        if !need_left && !need_right && !need_bottom {
+        let min_cov = child.bbox.height * 0.5;
+        let need_left = covered(cell_left) < min_cov;
+        let need_right = covered(cell_right) < min_cov;
+        if !need_left && !need_right {
             continue;
         }
         repairs.push((
@@ -1931,16 +1947,10 @@ pub(super) fn repair_unframed_table_cell_borders(
             cell_bottom,
             need_left,
             need_right,
-            need_bottom,
         ));
     }
 
-    for (borders, left, top, right, bottom, need_left, need_right, need_bottom) in repairs {
-        if need_bottom {
-            table_node.children.extend(create_border_line_nodes(
-                tree, &borders[3], left, bottom, right, bottom,
-            ));
-        }
+    for (borders, left, top, right, bottom, need_left, need_right) in repairs {
         if need_left {
             table_node.children.extend(create_border_line_nodes(
                 tree, &borders[0], left, top, left, bottom,
@@ -3583,9 +3593,7 @@ impl LayoutEngine {
         }
 
         // ── 6. 테두리 렌더링 ──
-        // 병합 내부 슬롯에 남은 실선은 먼저 지운다. (끄면 rowspan 안을 가로선이
-        // 가로지르는 유령 선이 남는다.) 쪽 나눔으로 셀 bbox 만 길어진 칸의
-        // 바깥 세로/바닥은 아래 `repair_unframed_table_cell_borders` 가 보강한다.
+        // 병합 내부 슬롯을 지운 뒤 실선을 그린다.
         if independent_col_row_y.is_none() {
             clear_covered_span_edges(
                 &mut h_edges,
@@ -3628,12 +3636,15 @@ impl LayoutEngine {
         extend_completed_nested_table_border_clips(
             tree,
             &mut table_node,
+            Some(col_area.y + col_area.height),
             self.profile.get().hwp5_stored_pagination_layout()
                 || self.profile.get().hwp5_origin_hwpx(),
             self.profile.get().hwpx_container(),
         );
-        clip_horizontals_crossing_cell_interiors(tree, &mut table_node);
         repair_unframed_table_cell_borders(tree, &mut table_node, styles);
+
+        // 커진 bbox 를 흐름 높이에 반영한다.
+        let table_height = table_node.bbox.height.max(table_height);
 
         col_node.children.push(table_node);
 
@@ -6229,11 +6240,7 @@ impl LayoutEngine {
                                         .unwrap_or(0.0);
                                     base + vpos_px + v_off
                                 } else if let Some(vpos_px) = stored_flow_vpos {
-                                    // 텍스트 문단과 같은 기저. Center/Bottom 셀은
-                                    // text_y_start 에 valign offset 이 들어 있고,
-                                    // Top+vpos 앵커는 content_top 절대 사다리를 쓴다
-                                    // (다수인증 양식 p14: 단일 float 가 content_top 만
-                                    // 쓰면 ☞ 세 번째 줄을 덮음).
+                                    // Center/Bottom 은 text_y_start, Top+vpos 는 content_top.
                                     let flow_base = if use_top_vpos_anchor {
                                         content_top
                                     } else {
@@ -14892,6 +14899,62 @@ impl LayoutEngine {
         extra
     }
 
+    /// 컷 창의 보정 글줄 길이. 전달된 셀 높이보다 길면 이쪽을 쓴다.
+    fn stored_line_span_in_cut(
+        &self,
+        cell: &crate::model::table::Cell,
+        units: &[CellUnit],
+        start: usize,
+        end: usize,
+        styles: &ResolvedStyleSet,
+    ) -> f64 {
+        let lo = start.min(units.len());
+        let hi = end.min(units.len()).max(lo);
+        let mut span = 0.0_f64;
+        let mut counted = 0_usize;
+        let mut last_spacing = 0.0_f64;
+        for unit in units.iter().take(hi).skip(lo) {
+            if unit.vis_end <= unit.vis_start {
+                continue;
+            }
+            let Some(para) = cell.paragraphs.get(unit.para_idx) else {
+                continue;
+            };
+            let Some(seg) = para.line_segs.get(unit.vis_start) else {
+                continue;
+            };
+            if seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY != 0 {
+                continue;
+            }
+            let max_fs = para
+                .char_shapes
+                .iter()
+                .filter_map(|shape| styles.char_styles.get(shape.char_shape_id as usize))
+                .map(|style| style.font_size)
+                .fold(0.0_f64, f64::max);
+            let para_style = styles.para_styles.get(para.para_shape_id as usize);
+            let ls_type = para_style
+                .map(|style| style.line_spacing_type)
+                .unwrap_or(crate::model::style::LineSpacingType::Percent);
+            let ls_val = para_style.map(|style| style.line_spacing).unwrap_or(160.0);
+            let (line_h, spacing) = crate::renderer::corrected_line_metrics(
+                hwpunit_to_px(seg.line_height, self.dpi),
+                hwpunit_to_px(seg.line_spacing, self.dpi),
+                max_fs,
+                ls_type,
+                ls_val,
+            );
+            span += line_h.max(0.0) + spacing.max(0.0);
+            last_spacing = spacing.max(0.0);
+            counted += 1;
+        }
+        if counted == 0 {
+            0.0
+        } else {
+            (span - last_spacing).max(0.0)
+        }
+    }
+
     /// [Task #993 / #1022] 분할 행에서 컷 범위 `[start_cut, end_cut)` 사이의
     /// **행 총 높이**(패딩 포함)를 반환한다. HeightMeasurer 와 정합 — 셀별로
     /// `max(cell.height, content + pad_cell)` 를 산출해 행 max.
@@ -14997,8 +15060,19 @@ impl LayoutEngine {
                     (content + pad_cell).max(cell_h_px)
                 }
             } else {
-                // 분할 행 — cell.height 강제 없음.
-                content + pad_cell
+                // 분할 조각은 글줄 길이를 행 높이로 쓴다.
+                let line_span =
+                    self.stored_line_span_in_cut(cell, units.as_slice(), su, eu, styles);
+                // 빈 창의 짧은 라벨은 다시 그리는 글줄 높이를 쓴다.
+                let repeated = if su >= eu
+                    && su > 0
+                    && self.cell_is_short_repeatable_label(cell, table, styles)
+                {
+                    units.iter().map(|unit| unit.height).sum::<f64>()
+                } else {
+                    0.0
+                };
+                content.max(line_span).max(repeated) + pad_cell
             };
             if h > max_h {
                 max_h = h;
@@ -17762,7 +17836,7 @@ mod trailing_text_overflow_tests {
         table.children.push(line_node(3, 37.8, 371.8, 748.4, 371.8));
         table.children.push(line_node(4, 37.8, 56.7, 37.8, 371.8));
 
-        extend_table_bottom_to_direct_cell_text_overflow(&mut table);
+        extend_table_bottom_to_direct_cell_text_overflow(&mut table, None);
 
         let table_bottom = table.bbox.y + table.bbox.height;
         assert!(
@@ -17805,7 +17879,7 @@ mod trailing_text_overflow_tests {
         table.children.push(line_node(3, 37.8, 371.8, 748.4, 371.8));
         table.children.push(line_node(4, 37.8, 56.7, 37.8, 371.8));
 
-        extend_table_bottom_to_direct_cell_text_overflow(&mut table);
+        extend_table_bottom_to_direct_cell_text_overflow(&mut table, None);
 
         let RenderNodeType::Line(bottom) = &table.children[1].node_type else {
             panic!("expected bottom border");
@@ -17841,7 +17915,7 @@ mod trailing_text_overflow_tests {
         table.children.push(line_node(4, 37.8, 485.1, 748.4, 485.1));
         table.children.push(line_node(5, 37.8, 141.8, 37.8, 485.9));
 
-        extend_table_bottom_to_direct_cell_text_overflow(&mut table);
+        extend_table_bottom_to_direct_cell_text_overflow(&mut table, None);
 
         let upper_bot = table.children[0].bbox.y + table.children[0].bbox.height;
         assert!(
@@ -17866,8 +17940,7 @@ mod trailing_text_overflow_tests {
 
     #[test]
     fn extend_table_bottom_ignores_neighbor_column_mid_seam() {
-        // rowspan 라벨(좌) 글자가 설명칸(우) 행 경계 가로줄만 가로질러도
-        // 넘침으로 보지 않는다.
+        // 옆 칸 행 경계만 가로지르는 글줄은 넘침이 아니다.
         let mut table = RenderNode::new(
             1,
             RenderNodeType::Table(TableNode {
@@ -17888,10 +17961,10 @@ mod trailing_text_overflow_tests {
         table.children.push(label);
         table.children.push(upper);
         table.children.push(lower);
-        // 설명칸만 가로지르는 행 경계
+        // 옆 칸 행 경계
         table.children.push(line_node(4, 206.0, 903.6, 534.0, 903.6));
 
-        extend_table_bottom_to_direct_cell_text_overflow(&mut table);
+        extend_table_bottom_to_direct_cell_text_overflow(&mut table, None);
 
         assert!(
             (table.children[1].bbox.height - 24.6).abs() < 0.01,
@@ -17933,7 +18006,40 @@ mod trailing_text_overflow_tests {
         table.children.push(cell);
         table.children.push(line_node(3, 0.0, 50.0, 100.0, 50.0));
 
-        extend_table_bottom_to_direct_cell_text_overflow(&mut table);
+        extend_table_bottom_to_direct_cell_text_overflow(&mut table, None);
         assert!((table.bbox.height - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn unify_keeps_rowspan_from_pushing_covered_rows() {
+        let mut table = RenderNode::new(
+            1,
+            RenderNodeType::Table(TableNode {
+                row_count: 3,
+                col_count: 2,
+                border_fill_id: 0,
+                section_index: None,
+                para_index: None,
+                control_index: None,
+                cell_context: None,
+            }),
+            BoundingBox::new(0.0, 10.0, 80.0, 40.0),
+        );
+        let mut span = cell_node(false, false, BoundingBox::new(0.0, 10.0, 40.0, 40.0));
+        if let RenderNodeType::TableCell(cell) = &mut span.node_type {
+            cell.row_span = 2;
+        }
+        let sibling = cell_node(false, false, BoundingBox::new(40.0, 10.0, 40.0, 20.0));
+        let covered = cell_node(false, false, BoundingBox::new(40.0, 30.0, 40.0, 20.0));
+        table.children.push(span);
+        table.children.push(sibling);
+        table.children.push(covered);
+
+        extend_table_bottom_to_direct_cell_text_overflow(&mut table, None);
+
+        assert!((table.children[0].bbox.height - 40.0).abs() < 0.01);
+        assert!((table.children[1].bbox.height - 20.0).abs() < 0.01);
+        assert!((table.children[2].bbox.y - 30.0).abs() < 0.01);
+        assert!((table.bbox.height - 40.0).abs() < 0.01);
     }
 }
