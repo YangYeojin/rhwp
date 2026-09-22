@@ -1704,8 +1704,8 @@ fn render_cell_box_borders(
 /// 엣지 그리드 테두리가 셀 bbox를 충분히 덮지 못하면 셀 상자 기준으로 보강한다.
 ///
 /// 쪽 나눔 조각·행 높이 비대칭 확장 이후, 그리드 행 슬롯과 실제 셀 높이가
-/// 어긋나면 세로 괘선만 빠지는 구멍이 생긴다(ISMS 운영명세서 17쪽 8.2.5).
-/// 왼쪽/오른쪽 세로 덮임이 높이의 절반 미만인 변만 셀 bbox에 다시 그린다.
+/// 어긋나면 세로뿐 아니라 바닥/천장 가로 괘선도 빠진다(ISMS 17쪽 8.2.5).
+/// 네 변 각각 덮임이 해당 변 길이의 절반 미만이면 셀 bbox에 다시 그린다.
 pub(super) fn repair_unframed_table_cell_borders(
     tree: &mut PageLayoutContext,
     table_node: &mut RenderNode,
@@ -1735,11 +1735,11 @@ pub(super) fn repair_unframed_table_cell_borders(
         let cell_bottom = cell_top + child.bbox.height;
         let cell_left = child.bbox.x;
         let cell_right = cell_left + child.bbox.width;
-        if child.bbox.height <= EDGE_MATCH_PX {
+        if child.bbox.height <= EDGE_MATCH_PX || child.bbox.width <= EDGE_MATCH_PX {
             continue;
         }
 
-        let covered = |target_x: f64| -> f64 {
+        let covered_v = |target_x: f64| -> f64 {
             let mut total = 0.0_f64;
             for edge in &table_node.children {
                 let RenderNodeType::Line(line) = &edge.node_type else {
@@ -1758,11 +1758,33 @@ pub(super) fn repair_unframed_table_cell_borders(
             }
             total
         };
+        let covered_h = |target_y: f64| -> f64 {
+            let mut total = 0.0_f64;
+            for edge in &table_node.children {
+                let RenderNodeType::Line(line) = &edge.node_type else {
+                    continue;
+                };
+                if (line.y1 - line.y2).abs() > NESTED_FRAGMENT_EDGE_EPSILON_PX {
+                    continue;
+                }
+                if (line.y1 - target_y).abs() > EDGE_MATCH_PX {
+                    continue;
+                }
+                let x_lo = line.x1.min(line.x2);
+                let x_hi = line.x1.max(line.x2);
+                let overlap = (x_hi.min(cell_right) - x_lo.max(cell_left)).max(0.0);
+                total += overlap;
+            }
+            total
+        };
 
-        let min_cov = child.bbox.height * 0.5;
-        let need_left = covered(cell_left) < min_cov;
-        let need_right = covered(cell_right) < min_cov;
-        if !need_left && !need_right {
+        let min_v = child.bbox.height * 0.5;
+        let min_h = child.bbox.width * 0.5;
+        let need_left = covered_v(cell_left) < min_v;
+        let need_right = covered_v(cell_right) < min_v;
+        let need_top = covered_h(cell_top) < min_h;
+        let need_bottom = covered_h(cell_bottom) < min_h;
+        if !need_left && !need_right && !need_top && !need_bottom {
             continue;
         }
         repairs.push((
@@ -1773,10 +1795,24 @@ pub(super) fn repair_unframed_table_cell_borders(
             cell_bottom,
             need_left,
             need_right,
+            need_top,
+            need_bottom,
         ));
     }
 
-    for (borders, left, top, right, bottom, need_left, need_right) in repairs {
+    for (borders, left, top, right, bottom, need_left, need_right, need_top, need_bottom) in
+        repairs
+    {
+        if need_top {
+            table_node.children.extend(create_border_line_nodes(
+                tree, &borders[2], left, top, right, top,
+            ));
+        }
+        if need_bottom {
+            table_node.children.extend(create_border_line_nodes(
+                tree, &borders[3], left, bottom, right, bottom,
+            ));
+        }
         if need_left {
             table_node.children.extend(create_border_line_nodes(
                 tree, &borders[0], left, top, left, bottom,
