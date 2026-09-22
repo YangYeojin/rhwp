@@ -22,14 +22,18 @@
 //! 4. **`ttfs/opensource`** — 최후 폴백. `.gitignore` 대상이 아닌 **저장소 자산**
 //!    (NotoSansKR 2종 + OFL)이라 모든 체크아웃에서 확보된다. 폰트 미설치 환경
 //!    (CI headless·컨테이너)에서 한국어가 드롭되는 것을 막는다(#2293).
+//! 5. **`assets/fonts`** — 그 다음. 로컬 공공 폰트(TTF/OTF). 없으면 건너뛴다.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// 폰트 탐색 경로 환경변수. 복수 경로는 OS 관례 구분자로 나눈다.
 pub const FONT_PATH_ENV: &str = "RHWP_FONT_PATH";
 
 /// 저장소 번들 오픈소스 폰트 — 최후 폴백(#2293 한국어 드롭 방지).
 pub const BUNDLED_OPENSOURCE_DIR: &str = "ttfs/opensource";
+
+/// 로컬 공공 폰트(TTF/OTF)가 있는 디렉터리. 없으면 건너뛴다.
+pub const BUNDLED_PUBLIC_DIR: &str = "assets/fonts";
 
 /// `RHWP_FONT_PATH` 를 읽어 경로 목록으로 나눈다.
 ///
@@ -90,8 +94,8 @@ pub fn search_dirs(extra: &[PathBuf]) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = extra.to_vec();
     dirs.extend(env_font_paths());
     dirs.extend(system_font_dirs());
-    // 최후 폴백 — 저장소 자산이라 항상 존재한다(#2293).
-    dirs.push(PathBuf::from(BUNDLED_OPENSOURCE_DIR));
+    // 최후 폴백. 오픈소스 번들 다음이 로컬 공공 폰트다.
+    dirs.extend(bundled_font_dirs());
     dirs
 }
 
@@ -117,7 +121,10 @@ pub fn custom_font_dirs(extra: &[PathBuf]) -> Vec<PathBuf> {
 /// 에서 한국어 드롭을 막는 저장소 자산(#2293). 해석 체인에서는 custom·시스템
 /// 뒤(최후)에만 선다(#3300).
 pub fn bundled_font_dirs() -> Vec<PathBuf> {
-    vec![PathBuf::from(BUNDLED_OPENSOURCE_DIR)]
+    vec![
+        PathBuf::from(BUNDLED_OPENSOURCE_DIR),
+        PathBuf::from(BUNDLED_PUBLIC_DIR),
+    ]
 }
 
 /// `fontdb` 에 조달 순서대로 폰트를 적재한다.
@@ -146,9 +153,10 @@ pub fn load_into_fontdb(fontdb: &mut usvg::fontdb::Database, extra: &[PathBuf]) 
             );
         }
     }
-    let bundled = Path::new(BUNDLED_OPENSOURCE_DIR);
-    if bundled.exists() {
-        fontdb.load_fonts_dir(bundled);
+    for dir in bundled_font_dirs() {
+        if dir.exists() {
+            fontdb.load_fonts_dir(&dir);
+        }
     }
 }
 
@@ -203,9 +211,12 @@ mod tests {
         );
         assert_eq!(
             dirs.last(),
-            Some(&PathBuf::from(BUNDLED_OPENSOURCE_DIR)),
-            "번들 오픈소스 폰트가 최후 폴백이어야 한다"
+            Some(&PathBuf::from(BUNDLED_PUBLIC_DIR)),
+            "로컬 공공 폰트가 최후 폴백이어야 한다"
         );
+        let open = dirs.iter().position(|d| d.as_os_str() == BUNDLED_OPENSOURCE_DIR);
+        let public = dirs.iter().position(|d| d.as_os_str() == BUNDLED_PUBLIC_DIR);
+        assert!(open.is_some() && public.is_some() && open < public);
     }
 
     /// [#2864] 환경 종속 경로가 조달 목록에 다시 들어오지 않도록 고정한다.
@@ -254,6 +265,10 @@ mod tests {
             !dirs.contains(&PathBuf::from(BUNDLED_OPENSOURCE_DIR)),
             "번들은 custom 이 아니라 최후-폴백 로더로 간다"
         );
+        assert!(
+            !dirs.contains(&PathBuf::from(BUNDLED_PUBLIC_DIR)),
+            "공공 폰트도 최후-폴백 로더로만 간다"
+        );
         std::env::remove_var(FONT_PATH_ENV);
     }
 
@@ -262,7 +277,10 @@ mod tests {
     fn bundled_font_dirs_is_repo_asset_only() {
         assert_eq!(
             bundled_font_dirs(),
-            vec![PathBuf::from(BUNDLED_OPENSOURCE_DIR)]
+            vec![
+                PathBuf::from(BUNDLED_OPENSOURCE_DIR),
+                PathBuf::from(BUNDLED_PUBLIC_DIR),
+            ]
         );
     }
 }

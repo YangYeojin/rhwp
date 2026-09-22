@@ -51,6 +51,11 @@ Thumbs.db
 /assets/fonts/MalgunGothicW35-Regular.woff2
 /assets/fonts/WebdingsW95-Regular.woff2
 /assets/fonts/WingdingsW95-3.woff2
+# 로컬 공공 폰트. 웹 번들 woff2 와 같은 디렉터리에 두되 커밋하지 않는다.
+/assets/fonts/*.ttf
+/assets/fonts/*.otf
+/assets/fonts/*.TTF
+/assets/fonts/*.OTF
 
 # 외부 참조
 /webhwp/
