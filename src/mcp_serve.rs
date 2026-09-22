@@ -831,7 +831,8 @@ const DOC_RESOURCES: &[DocResource] = &[
         title: "에이전트 지식 지도",
         description: "작업별 명령 결정 표·봉투 필드 사전·주소 어휘. 첫 문서로 읽는다.",
         mime_type: "text/markdown",
-        text: include_str!("../mydocs/manual/agent_knowledge_map.md"),
+        // slim fork: mydocs/gym 히스토리 제거. MCP 문서 본문은 비우고 URI만 유지.
+        text: "",
     },
     DocResource {
         uri: "rhwp://docs/agent_troubleshooting_guide.md",
@@ -839,18 +840,15 @@ const DOC_RESOURCES: &[DocResource] = &[
         title: "에이전트 실패 사전",
         description: "오류 문자열 그대로 검색되는 증상별 원인·처방.",
         mime_type: "text/markdown",
-        text: include_str!("../mydocs/manual/agent_troubleshooting_guide.md"),
+        text: "",
     },
-    // [#3627 잔여 / R7·R34] 레시피 6편 — 목표에서 시작하는 완주 서사. 지식 지도가
-    // "무엇을 부르나"라면 레시피는 "어떤 순서로 목표까지 가나"다. MCP 클라이언트가
-    // 프로토콜 표준 경로로 읽을 수 있어야 CLI·저장소 없이도 서사가 닿는다.
     DocResource {
         uri: "rhwp://recipes/01_fill_form_and_submit.md",
         name: "recipe-01-fill-form",
         title: "레시피 1 — 서식 문서를 채워서 제출용으로 만들기",
         description: "필드 조회→채움→검증→산출 완주 서사 (실측 출력 인용).",
         mime_type: "text/markdown",
-        text: include_str!("../mydocs/manual/recipes/01_fill_form_and_submit.md"),
+        text: "",
     },
     DocResource {
         uri: "rhwp://recipes/02_table_csv_roundtrip.md",
@@ -858,7 +856,7 @@ const DOC_RESOURCES: &[DocResource] = &[
         title: "레시피 2 — 표 데이터를 CSV 로 뽑아 고치고 되돌리기",
         description: "export-tables→스프레드시트 편집→csv-to-table 왕복 서사.",
         mime_type: "text/markdown",
-        text: include_str!("../mydocs/manual/recipes/02_table_csv_roundtrip.md"),
+        text: "",
     },
     DocResource {
         uri: "rhwp://recipes/03_redact_before_sharing.md",
@@ -866,7 +864,7 @@ const DOC_RESOURCES: &[DocResource] = &[
         title: "레시피 3 — 배포 전 개인정보 마스킹",
         description: "redact --dry-run 검토→실행→재검사 서사 (--no-raw 기본).",
         mime_type: "text/markdown",
-        text: include_str!("../mydocs/manual/recipes/03_redact_before_sharing.md"),
+        text: "",
     },
     DocResource {
         uri: "rhwp://recipes/04_safety_check_untrusted_doc.md",
@@ -874,7 +872,7 @@ const DOC_RESOURCES: &[DocResource] = &[
         title: "레시피 4 — 출처를 모르는 문서를 처음 열 때",
         description: "inspect 3축(은닉·주입·유니코드) 선검사 서사.",
         mime_type: "text/markdown",
-        text: include_str!("../mydocs/manual/recipes/04_safety_check_untrusted_doc.md"),
+        text: "",
     },
     DocResource {
         uri: "rhwp://recipes/05_mail_merge_batch_fill.md",
@@ -882,7 +880,7 @@ const DOC_RESOURCES: &[DocResource] = &[
         title: "레시피 5 — 서식 하나에 여러 사람 데이터를 한 번에 채우기",
         description: "batch fill 메일머지 서사 (행 파일→산출물 N).",
         mime_type: "text/markdown",
-        text: include_str!("../mydocs/manual/recipes/05_mail_merge_batch_fill.md"),
+        text: "",
     },
     DocResource {
         uri: "rhwp://recipes/06_visual_regression_before_after.md",
@@ -890,18 +888,15 @@ const DOC_RESOURCES: &[DocResource] = &[
         title: "레시피 6 — 편집 전후를 눈이 아니라 숫자로 비교하기",
         description: "render-diff 픽셀 판정 서사 (bbox 불변 증명).",
         mime_type: "text/markdown",
-        text: include_str!("../mydocs/manual/recipes/06_visual_regression_before_after.md"),
+        text: "",
     },
-    // [트랙 L L4] 축 리소스 2종 — 프로젝트가 어디로 가는지(로드맵)와 실력을 어떻게
-    // 재는지(gym)를 MCP resources/read 로 직접 읽게 노출한다. 순수 DOC_RESOURCES
-    // 추가이므로 served_resources()/read_resource() 가 자동으로 목록·읽기한다.
     DocResource {
         uri: "rhwp://docs/roadmap",
         name: "roadmap-atlas",
         title: "rhwp 에이전트 로드맵 아틀라스 (R1~R200)",
         description: "에이전트-네이티브 로드맵 전 단계의 한 화면 지도 — 무엇을·왜·다음.",
         mime_type: "text/markdown",
-        text: include_str!("../mydocs/tech/agent_roadmap/atlas_r1_r200.md"),
+        text: "",
     },
     DocResource {
         uri: "rhwp://docs/gym",
@@ -910,7 +905,7 @@ const DOC_RESOURCES: &[DocResource] = &[
         description:
             "에이전트가 실문서로 실력을 겨루고 기록으로 남기는 벤치마크 — 과제판·채점·리더보드.",
         mime_type: "text/markdown",
-        text: include_str!("../gym/README.md"),
+        text: "",
     },
 ];
 
