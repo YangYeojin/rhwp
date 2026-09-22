@@ -1701,11 +1701,146 @@ fn render_cell_box_borders(
     nodes
 }
 
+/// 셀 bbox 내부를 가로지르는 가로 괘선 구간을 잘라낸다.
+///
+/// 행 높이 비대칭(한 칸만 길게)일 때 짧은 칸의 바닥선이 긴 칸 글줄 한가운데를
+/// 가로지르는 유령 선이 된다(ISMS 8.2.5 운영현황). 셀 top/bottom 경계선은
+/// 남기고, 엄밀한 내부만 구멍 낸다.
+pub(super) fn clip_horizontals_crossing_cell_interiors(
+    tree: &mut PageLayoutContext,
+    table_node: &mut RenderNode,
+) {
+    if !matches!(table_node.node_type, RenderNodeType::Table(_)) {
+        return;
+    }
+    const EDGE_MATCH_PX: f64 = 1.5;
+    let cells: Vec<(f64, f64, f64, f64)> = table_node
+        .children
+        .iter()
+        .filter(|c| matches!(c.node_type, RenderNodeType::TableCell(_)))
+        .map(|c| {
+            (
+                c.bbox.x,
+                c.bbox.y,
+                c.bbox.x + c.bbox.width,
+                c.bbox.y + c.bbox.height,
+            )
+        })
+        .filter(|(_, t, _, b)| *b - *t > EDGE_MATCH_PX * 2.0)
+        .collect();
+    if cells.is_empty() {
+        return;
+    }
+
+    let mut extras: Vec<RenderNode> = Vec::new();
+    let mut hide: Vec<usize> = Vec::new();
+
+    for (idx, child) in table_node.children.iter_mut().enumerate() {
+        let RenderNodeType::Line(line) = &mut child.node_type else {
+            continue;
+        };
+        if !child.visible {
+            continue;
+        }
+        if (line.y1 - line.y2).abs() > NESTED_FRAGMENT_EDGE_EPSILON_PX {
+            continue;
+        }
+        let y = line.y1;
+        let mut x_lo = line.x1.min(line.x2);
+        let mut x_hi = line.x1.max(line.x2);
+        if x_hi - x_lo <= EDGE_MATCH_PX {
+            continue;
+        }
+
+        let mut cuts: Vec<(f64, f64)> = Vec::new();
+        for &(cl, ct, cr, cb) in &cells {
+            if y <= ct + EDGE_MATCH_PX || y >= cb - EDGE_MATCH_PX {
+                continue;
+            }
+            let a = x_lo.max(cl);
+            let b = x_hi.min(cr);
+            if b - a > EDGE_MATCH_PX {
+                cuts.push((a, b));
+            }
+        }
+        if cuts.is_empty() {
+            continue;
+        }
+        cuts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut merged: Vec<(f64, f64)> = Vec::new();
+        for (a, b) in cuts {
+            if let Some(last) = merged.last_mut() {
+                if a <= last.1 + EDGE_MATCH_PX {
+                    last.1 = last.1.max(b);
+                    continue;
+                }
+            }
+            merged.push((a, b));
+        }
+
+        let mut segs: Vec<(f64, f64)> = Vec::new();
+        let mut cursor = x_lo;
+        for (a, b) in merged {
+            if a - cursor > EDGE_MATCH_PX {
+                segs.push((cursor, a));
+            }
+            cursor = cursor.max(b);
+        }
+        if x_hi - cursor > EDGE_MATCH_PX {
+            segs.push((cursor, x_hi));
+        }
+
+        if segs.is_empty() {
+            hide.push(idx);
+            continue;
+        }
+        let style = line.style.clone();
+        let (s0, e0) = segs[0];
+        line.x1 = s0;
+        line.x2 = e0;
+        line.y1 = y;
+        line.y2 = y;
+        child.bbox.x = s0.min(e0);
+        child.bbox.y = y - style.width.max(0.5) / 2.0;
+        child.bbox.width = (e0 - s0).abs();
+        child.bbox.height = style.width.max(0.5);
+        for &(s, e) in &segs[1..] {
+            let mut node = LineNode::new(s, y, e, y, style.clone());
+            node.section_index = line.section_index;
+            node.para_index = line.para_index;
+            node.control_index = line.control_index;
+            node.cell_index = line.cell_index;
+            node.cell_para_index = line.cell_para_index;
+            node.outer_table_control_index = line.outer_table_control_index;
+            let ink_h = style.width.max(0.5);
+            extras.push(RenderNode::new(
+                tree.next_id(),
+                RenderNodeType::Line(node),
+                BoundingBox {
+                    x: s.min(e),
+                    y: y - ink_h / 2.0,
+                    width: (e - s).abs(),
+                    height: ink_h,
+                },
+            ));
+        }
+    }
+
+    for idx in hide.into_iter().rev() {
+        table_node.children[idx].visible = false;
+    }
+    table_node.children.extend(extras);
+}
+
 /// 엣지 그리드 테두리가 셀 bbox를 충분히 덮지 못하면 셀 상자 기준으로 보강한다.
 ///
-/// 쪽 나눔 조각·행 높이 비대칭 확장 이후, 그리드 행 슬롯과 실제 셀 높이가
-/// 어긋나면 세로뿐 아니라 바닥/천장 가로 괘선도 빠진다(ISMS 17쪽 8.2.5).
-/// 네 변 각각 덮임이 해당 변 길이의 절반 미만이면 셀 bbox에 다시 그린다.
+/// 쪽 나눔·행 높이 비대칭 확장 후 그리드 슬롯과 셀 높이가 어긋나면 세로 괘선이
+/// 빠지고, `clear_covered_span_edges` 가 병합 내부 가로선을 지운 뒤에도 바닥선이
+/// 셀 bbox까지 따라오지 않을 수 있다(ISMS 17쪽 8.2.5).
+///
+/// - 세로: 왼쪽/오른쪽 덮임이 높이의 절반 미만이면 보강
+/// - 가로: **세로 보강이 필요한 셀의 바닥만** 보강 (천장·단독 가로는
+///   짧은 유령 선을 만들기 쉬워 넣지 않음)
 pub(super) fn repair_unframed_table_cell_borders(
     tree: &mut PageLayoutContext,
     table_node: &mut RenderNode,
@@ -1782,9 +1917,10 @@ pub(super) fn repair_unframed_table_cell_borders(
         let min_h = child.bbox.width * 0.5;
         let need_left = covered_v(cell_left) < min_v;
         let need_right = covered_v(cell_right) < min_v;
-        let need_top = covered_h(cell_top) < min_h;
-        let need_bottom = covered_h(cell_bottom) < min_h;
-        if !need_left && !need_right && !need_top && !need_bottom {
+        // 가로는 세로가 비는 "높이 어긋남" 케이스에만 바닥을 보강한다.
+        let need_bottom =
+            (need_left || need_right) && covered_h(cell_bottom) < min_h;
+        if !need_left && !need_right && !need_bottom {
             continue;
         }
         repairs.push((
@@ -1795,19 +1931,11 @@ pub(super) fn repair_unframed_table_cell_borders(
             cell_bottom,
             need_left,
             need_right,
-            need_top,
             need_bottom,
         ));
     }
 
-    for (borders, left, top, right, bottom, need_left, need_right, need_top, need_bottom) in
-        repairs
-    {
-        if need_top {
-            table_node.children.extend(create_border_line_nodes(
-                tree, &borders[2], left, top, right, top,
-            ));
-        }
+    for (borders, left, top, right, bottom, need_left, need_right, need_bottom) in repairs {
         if need_bottom {
             table_node.children.extend(create_border_line_nodes(
                 tree, &borders[3], left, bottom, right, bottom,
@@ -3455,10 +3583,16 @@ impl LayoutEngine {
         }
 
         // ── 6. 테두리 렌더링 ──
-        // `clear_covered_span_edges` 는 투명선 가이드 전용이다. 실선 엣지 앞에
-        // 호출하면 병합 커버리지가 실제 괘선까지 지워 세로/가로 테두리가 빈다
-        // (ISMS 운영명세서 17쪽 8.2.5 행).
+        // 병합 내부 슬롯에 남은 실선은 먼저 지운다. (끄면 rowspan 안을 가로선이
+        // 가로지르는 유령 선이 남는다.) 쪽 나눔으로 셀 bbox 만 길어진 칸의
+        // 바깥 세로/바닥은 아래 `repair_unframed_table_cell_borders` 가 보강한다.
         if independent_col_row_y.is_none() {
+            clear_covered_span_edges(
+                &mut h_edges,
+                &mut v_edges,
+                &h_span_covered,
+                &v_span_covered,
+            );
             let body_top_clip = (depth == 0
                 && self.is_body_flow_col_area(col_area)
                 && (table_y - col_area.y).abs() <= 0.5)
@@ -3474,12 +3608,6 @@ impl LayoutEngine {
                 body_top_clip,
             ));
             if self.show_transparent_borders.get() {
-                clear_covered_span_edges(
-                    &mut h_edges,
-                    &mut v_edges,
-                    &h_span_covered,
-                    &v_span_covered,
-                );
                 table_node.children.extend(render_transparent_borders(
                     tree,
                     &h_edges,
@@ -3504,6 +3632,7 @@ impl LayoutEngine {
                 || self.profile.get().hwp5_origin_hwpx(),
             self.profile.get().hwpx_container(),
         );
+        clip_horizontals_crossing_cell_interiors(tree, &mut table_node);
         repair_unframed_table_cell_borders(tree, &mut table_node, styles);
 
         col_node.children.push(table_node);

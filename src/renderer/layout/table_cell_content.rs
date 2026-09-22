@@ -1274,17 +1274,16 @@ impl LayoutEngine {
         }
 
         // 엣지 기반 테두리 렌더링
-        // `clear_covered_span_edges` 는 투명선 가이드 전용.
+        clear_covered_span_edges(
+            &mut h_edges,
+            &mut v_edges,
+            &h_span_covered,
+            &v_span_covered,
+        );
         table_node.children.extend(render_edge_borders(
             tree, &h_edges, &v_edges, &row_col_x, &row_y, table_x, table_y, None,
         ));
         if self.show_transparent_borders.get() {
-            clear_covered_span_edges(
-                &mut h_edges,
-                &mut v_edges,
-                &h_span_covered,
-                &v_span_covered,
-            );
             table_node.children.extend(render_transparent_borders(
                 tree,
                 &h_edges,
@@ -1298,6 +1297,7 @@ impl LayoutEngine {
             ));
         }
 
+        super::table_layout::clip_horizontals_crossing_cell_interiors(tree, &mut table_node);
         super::table_layout::repair_unframed_table_cell_borders(tree, &mut table_node, styles);
         parent.children.push(table_node);
         table_y + table_height

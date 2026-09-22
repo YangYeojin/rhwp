@@ -3801,8 +3801,14 @@ impl LayoutEngine {
         };
 
         // 엣지 기반 테두리 렌더링
-        // `clear_covered_span_edges` 는 투명선 가이드 전용 — 실선 앞에 두면
-        // 쪽 나눔 조각에서 실제 세로 괘선이 사라진다 (ISMS 17쪽 8.2.5).
+        // 병합 내부 실선은 먼저 지우고, 쪽 나눔으로 길어진 셀의 바깥 변은
+        // `repair_unframed_table_cell_borders` 가 보강한다.
+        clear_covered_span_edges(
+            &mut h_edges,
+            &mut v_edges,
+            &h_span_covered,
+            &v_span_covered,
+        );
         let body_top_clip = (enclosing_cell_ctx.is_none()
             && self.is_body_flow_col_area(col_area)
             && (table_y - col_area.y).abs() <= 0.5)
@@ -3818,12 +3824,6 @@ impl LayoutEngine {
             body_top_clip,
         ));
         if self.show_transparent_borders.get() {
-            clear_covered_span_edges(
-                &mut h_edges,
-                &mut v_edges,
-                &h_span_covered,
-                &v_span_covered,
-            );
             table_node.children.extend(render_transparent_borders(
                 tree,
                 &h_edges,
@@ -3848,6 +3848,7 @@ impl LayoutEngine {
                 || self.profile.get().hwp5_origin_hwpx(),
             self.profile.get().hwpx_container(),
         );
+        super::table_layout::clip_horizontals_crossing_cell_interiors(tree, &mut table_node);
         super::table_layout::repair_unframed_table_cell_borders(tree, &mut table_node, styles);
 
         // [Task #1860/#3820] 노드-자식 포섭 불변: 분할 표 조각의 셀 내 절대위치 shape
