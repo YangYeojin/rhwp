@@ -1701,6 +1701,95 @@ fn render_cell_box_borders(
     nodes
 }
 
+/// 엣지 그리드 테두리가 셀 bbox를 충분히 덮지 못하면 셀 상자 기준으로 보강한다.
+///
+/// 쪽 나눔 조각·행 높이 비대칭 확장 이후, 그리드 행 슬롯과 실제 셀 높이가
+/// 어긋나면 세로 괘선만 빠지는 구멍이 생긴다(ISMS 운영명세서 17쪽 8.2.5).
+/// 왼쪽/오른쪽 세로 덮임이 높이의 절반 미만인 변만 셀 bbox에 다시 그린다.
+pub(super) fn repair_unframed_table_cell_borders(
+    tree: &mut PageLayoutContext,
+    table_node: &mut RenderNode,
+    styles: &ResolvedStyleSet,
+) {
+    if !matches!(table_node.node_type, RenderNodeType::Table(_)) {
+        return;
+    }
+
+    const EDGE_MATCH_PX: f64 = 1.5;
+    let mut repairs = Vec::new();
+
+    for child in &table_node.children {
+        let RenderNodeType::TableCell(cell) = &child.node_type else {
+            continue;
+        };
+        if cell.border_fill_id == 0 {
+            continue;
+        }
+        let Some(bs) = styles
+            .border_styles
+            .get((cell.border_fill_id as usize).saturating_sub(1))
+        else {
+            continue;
+        };
+        let cell_top = child.bbox.y;
+        let cell_bottom = cell_top + child.bbox.height;
+        let cell_left = child.bbox.x;
+        let cell_right = cell_left + child.bbox.width;
+        if child.bbox.height <= EDGE_MATCH_PX {
+            continue;
+        }
+
+        let covered = |target_x: f64| -> f64 {
+            let mut total = 0.0_f64;
+            for edge in &table_node.children {
+                let RenderNodeType::Line(line) = &edge.node_type else {
+                    continue;
+                };
+                if (line.x1 - line.x2).abs() > NESTED_FRAGMENT_EDGE_EPSILON_PX {
+                    continue;
+                }
+                if (line.x1 - target_x).abs() > EDGE_MATCH_PX {
+                    continue;
+                }
+                let y_lo = line.y1.min(line.y2);
+                let y_hi = line.y1.max(line.y2);
+                let overlap = (y_hi.min(cell_bottom) - y_lo.max(cell_top)).max(0.0);
+                total += overlap;
+            }
+            total
+        };
+
+        let min_cov = child.bbox.height * 0.5;
+        let need_left = covered(cell_left) < min_cov;
+        let need_right = covered(cell_right) < min_cov;
+        if !need_left && !need_right {
+            continue;
+        }
+        repairs.push((
+            bs.borders,
+            cell_left,
+            cell_top,
+            cell_right,
+            cell_bottom,
+            need_left,
+            need_right,
+        ));
+    }
+
+    for (borders, left, top, right, bottom, need_left, need_right) in repairs {
+        if need_left {
+            table_node.children.extend(create_border_line_nodes(
+                tree, &borders[0], left, top, left, bottom,
+            ));
+        }
+        if need_right {
+            table_node.children.extend(create_border_line_nodes(
+                tree, &borders[1], right, top, right, bottom,
+            ));
+        }
+    }
+}
+
 pub(crate) fn border_style_has_diagonal(bs: &ResolvedBorderStyle) -> bool {
     let slash_bits = (bs.diagonal_attr >> 2) & 0x07;
     let backslash_bits = (bs.diagonal_attr >> 5) & 0x07;
@@ -3330,13 +3419,10 @@ impl LayoutEngine {
         }
 
         // ── 6. 테두리 렌더링 ──
+        // `clear_covered_span_edges` 는 투명선 가이드 전용이다. 실선 엣지 앞에
+        // 호출하면 병합 커버리지가 실제 괘선까지 지워 세로/가로 테두리가 빈다
+        // (ISMS 운영명세서 17쪽 8.2.5 행).
         if independent_col_row_y.is_none() {
-            clear_covered_span_edges(
-                &mut h_edges,
-                &mut v_edges,
-                &h_span_covered,
-                &v_span_covered,
-            );
             let body_top_clip = (depth == 0
                 && self.is_body_flow_col_area(col_area)
                 && (table_y - col_area.y).abs() <= 0.5)
@@ -3352,6 +3438,12 @@ impl LayoutEngine {
                 body_top_clip,
             ));
             if self.show_transparent_borders.get() {
+                clear_covered_span_edges(
+                    &mut h_edges,
+                    &mut v_edges,
+                    &h_span_covered,
+                    &v_span_covered,
+                );
                 table_node.children.extend(render_transparent_borders(
                     tree,
                     &h_edges,
@@ -3376,6 +3468,7 @@ impl LayoutEngine {
                 || self.profile.get().hwp5_origin_hwpx(),
             self.profile.get().hwpx_container(),
         );
+        repair_unframed_table_cell_borders(tree, &mut table_node, styles);
 
         col_node.children.push(table_node);
 
