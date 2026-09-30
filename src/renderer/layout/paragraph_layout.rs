@@ -3508,6 +3508,9 @@ impl LayoutEngine {
         wrap_anchor: Option<&crate::renderer::pagination::WrapAnchorRef>,
     ) -> f64 {
         let mut y = y_start;
+        let fitted_styles =
+            (composed.fit_ratio < 0.999).then(|| styles.with_char_ratio_scale(composed.fit_ratio));
+        let styles = fitted_styles.as_ref().unwrap_or(styles);
         let end = end_line.min(composed.lines.len());
         // [#4968 R4D-1] 한 문단의 모든 최종 emitted run이 같은 registry
         // generation과 per-face parse cache를 소비한다.
@@ -8885,6 +8888,7 @@ mod trailing_tac_width_tests {
             footnote_positions: Vec::new(),
             tab_extended: Vec::new(),
             horizontal_shaping: None,
+            fit_ratio: 1.0,
         }
     }
 

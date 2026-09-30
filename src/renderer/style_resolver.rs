@@ -149,6 +149,20 @@ impl ResolvedCharStyle {
     }
 }
 
+impl ResolvedStyleSet {
+    /// 글자 장평에 `scale`을 곱한 복제. 셀 한 줄을 칸 너비에 맞출 때 쓴다.
+    pub(crate) fn with_char_ratio_scale(&self, scale: f64) -> Self {
+        let mut cloned = self.clone();
+        for style in &mut cloned.char_styles {
+            style.ratio *= scale;
+            for ratio in &mut style.ratios {
+                *ratio *= scale;
+            }
+        }
+        cloned
+    }
+}
+
 /// 해소된 문단 스타일 (ParaShape → 렌더링용)
 #[derive(Debug, Clone)]
 pub struct ResolvedParaStyle {

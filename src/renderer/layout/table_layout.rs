@@ -16081,6 +16081,7 @@ mod row_cut_tests {
             footnote_positions: Vec::new(),
             tab_extended: Vec::new(),
             horizontal_shaping: None,
+            fit_ratio: 1.0,
         }
     }
 

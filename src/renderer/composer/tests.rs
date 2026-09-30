@@ -2207,9 +2207,8 @@ fn issue4149_fit_judgment_memoized_false_without_rewrap() {
     );
 }
 
-/// BREAK 칸은 저장 한 줄이 안쪽 폭만 넘어도 한컴처럼 다시 나눈다.
-/// 1.8× 미만 과밀(업스트림 #2430 이 무시하던 구간)도 재래핑하고,
-/// SQUEEZE/KEEP 은 한 줄을 유지한다.
+/// 2배 이하로 넘는 BREAK 칸은 줄을 나누지 않고 장평으로 맞춘다.
+/// SQUEEZE/KEEP 은 한 줄을 유지하고 장평은 그대로다.
 #[test]
 fn break_cell_reflows_moderate_overflow_squeeze_and_keep_do_not() {
     use crate::model::table::{CELL_LINE_WRAP_KEEP, CELL_LINE_WRAP_SQUEEZE};
@@ -2233,10 +2232,15 @@ fn break_cell_reflows_moderate_overflow_squeeze_and_keep_do_not() {
         96.0,
         crate::model::table::CELL_LINE_WRAP_BREAK,
     );
+    assert_eq!(
+        break_composed.lines.len(),
+        1,
+        "2배 이하 초과는 줄을 나누지 않아야 함"
+    );
     assert!(
-        break_composed.lines.len() > 1,
-        "BREAK 칸은 칸 폭을 넘기면 다시 나눠야 함 (got {} lines)",
-        break_composed.lines.len()
+        (break_composed.fit_ratio - (inner / natural)).abs() < 0.01,
+        "장평은 칸/실폭 이어야 함, got {}",
+        break_composed.fit_ratio
     );
 
     let mut squeeze = compose_paragraph(&para);

@@ -112,6 +112,8 @@ pub struct ComposedParagraph {
     /// owner로 넘기며 line breaking·layout·paint는 아직 이 값을 소비하지 않는다.
     pub(crate) horizontal_shaping:
         Option<std::sync::Arc<crate::renderer::shaping_paragraph::HorizontalShapingLineOutcome>>,
+    /// 셀 한 줄이 칸보다 넓을 때 곱하는 장평. 1이면 문서 장평 그대로.
+    pub fit_ratio: f64,
 }
 
 /// 구역의 문단 목록을 구성한다.
@@ -431,6 +433,7 @@ pub fn compose_paragraph(para: &Paragraph) -> ComposedParagraph {
         footnote_positions,
         tab_extended: para.tab_extended.clone(),
         horizontal_shaping: None,
+        fit_ratio: 1.0,
     };
 
     // CharOverlap 글자를 조합된 텍스트에 삽입
@@ -1849,10 +1852,9 @@ pub(crate) fn recompose_stored_single_line_if_overflowing_for_wrap(
     if !stored_single {
         return;
     }
-    // BREAK 칸은 한컴처럼 안쪽 폭에 맞춰 다시 나눈다. 업스트림 #2430 은 추정 폭이
-    // 5~15% 부풀어 1.05×에서 표 쪽수가 늘자 임계를 1.8×로 올렸고, 그 사이 칸은
-    // 한 줄로 남아 가로로 넘친다. doc-conversion 은 넘침보다 줄바꿈을 택한다.
-    // 여유는 서브픽셀(0.5px)만 — #2291 의 대형 과밀도 계속 재래핑된다.
+    // 2배 이하로 넘는 한 줄은 나누지 않고 장평으로 칸에 맞춘다. 줄을 늘리면
+    // 저장 y가 한 줄뿐이라 다음 줄이 내려가지 않고 겹친다. 2배를 넘는 저장
+    // (#2291)만 다시 나눈다. 여유는 서브픽셀(0.5px).
     //
     // [#4149] 판정 memo — 같은 (문단 text·char_shapes, 셀 내폭)이면 판정이 결정적
     // 인데, 페이지 트리 재빌드마다 estimate_composed_line_width 재측정이 반복돼
@@ -1898,6 +1900,15 @@ pub(crate) fn recompose_stored_single_line_if_overflowing_for_wrap(
         }
     }
     if !over {
+        return;
+    }
+    let measured = composed
+        .lines
+        .first()
+        .map(|line| estimate_composed_line_width(line, styles))
+        .unwrap_or(0.0);
+    if measured > 0.0 && measured <= cell_inner_width_px * 2.0 {
+        composed.fit_ratio = (cell_inner_width_px / measured).clamp(0.5, 1.0);
         return;
     }
     reflow_cell_line_ignoring_stored_segs(composed, para, cell_inner_width_px, styles, dpi);

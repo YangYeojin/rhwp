@@ -1401,18 +1401,24 @@ pub(crate) fn is_cjk_char(c: char) -> bool {
     || ('\u{FF00}'..='\u{FFEF}').contains(&c) // 전각 문자
 }
 
-/// 메트릭 DB에 없는 폰트의 ASCII 기호. 영숫자·공백은 제외한다.
+/// 메트릭 DB에 없는 폰트에서 0.85em으로 둘 ASCII 기호.
+/// 괄호·따옴표·슬래시·`^`·`!`·`?`·`-` 처럼 좁은 기호는 제외한다.
 fn is_ascii_symbol(c: char) -> bool {
-    c.is_ascii_graphic() && !c.is_ascii_alphanumeric()
+    c.is_ascii_graphic() && !c.is_ascii_alphanumeric() && !is_narrow_ascii_symbol(c)
+}
+
+fn is_narrow_ascii_symbol(c: char) -> bool {
+    matches!(
+        c,
+        '(' | ')' | '<' | '>' | '[' | ']' | '{' | '}'
+            | '/' | '\\' | '^' | '!' | '?' | '-' | '¯'
+            | '\'' | '"' | '`' | '*' | '+' | '₩'
+    )
 }
 
 /// 실제 글리프 폭이 반각(em/2)보다 뚜렷이 좁은 구두점·기호.
 /// 메트릭 DB 미등록 폰트의 폴백 폭 계산 시 `font_size * 0.5` 대신
 /// `font_size * 0.3` 을 쓰도록 분기하는 기준 (Task #257).
-///
-/// General Punctuation 좁은 글리프 확장: 휴먼명조 U+2027 등 DB 미수록
-/// 폰트의 폴백 `font_size * 0.5` 가 한컴 대비 ~10px 과대 (font-size 20px
-/// 기준). 한컴은 약 0.25-0.3 em 으로 렌더하므로 동일 분기 적용.
 fn is_narrow_punctuation(c: char) -> bool {
     matches!(
         c,
@@ -1429,13 +1435,6 @@ fn is_narrow_punctuation(c: char) -> bool {
 }
 
 /// [#2239] 괄호 '(' ')' narrow 폭(0.3em) — 사다리 실측 폰트 한정.
-///
-/// 통제 사다리 실측(#2195 stage30/31): 휴먼명조 '(' = 0.31em(embedded 정합),
-/// 한양중고딕 '(' <= 317HU(0.29em) — fallback 0.5em 은 과대
-/// (76076 표325 r0 '(정량)영향집단명' 11pt: 8800>8642 로 2줄, 한글 1줄).
-/// 단 HY신명조·바탕 계열은 0.5em(#2156 ASCII 폭 표 정합)이므로 폰트 무관
-/// `is_narrow_punctuation` 전역 분류는 금지 — 실측된 폰트에서만 좁힌다.
-/// (KoPub 계열은 `kopub_char_width` 자체 분기에서 별도 실측 근거로 유지.)
 fn is_narrow_paren_for_font(font_family: &str, c: char) -> bool {
     if !matches!(c, '(' | ')') {
         return false;
@@ -1445,11 +1444,6 @@ fn is_narrow_paren_for_font(font_family: &str, c: char) -> bool {
 }
 
 /// [#6023] Halfwidth and Fullwidth Forms 블록의 **반각** 구간.
-///
-/// FF00–FF60(전각 ASCII 변형)·FFE0–FFE6(전각 기호)은 전각이 맞지만,
-/// FF61–FFDC(｡｢｣､･, 반각 가타카나, 반각 한글 자모)와 FFE8–FFEE(반각 기호)는
-/// 유니코드 정의상 반각이다. 폴백 폭 분류에서 이 구간을 전각 블랭킷보다
-/// 먼저 가른다.
 fn is_unicode_halfwidth_form(c: char) -> bool {
     ('\u{FF61}'..='\u{FFDC}').contains(&c) || ('\u{FFE8}'..='\u{FFEE}').contains(&c)
 }
@@ -1459,10 +1453,6 @@ fn is_unicode_halfwidth_form(c: char) -> bool {
 /// 일부 등록 폰트는 `「」` glyph advance 를 전각으로 제공하지만, 한컴 PDF 기준
 /// 본문 조판에서는 법령명 낫표 뒤에 전각 공백처럼 보이는 간격이 생기지 않는다
 /// (#2020 돋움체 여권신청서).
-///
-/// 다만 휴먼명조·HY헤드라인M 에서는 한글이 전폭을 쓴다 (#6060). 메트릭 DB 의
-/// 「 폭은 두 계열 모두 `em_size` 이므로 일괄 반각 오버레이가 아니라 글꼴별로
-/// 갈라야 한다.
 pub(crate) fn is_halfwidth_cjk_quote(c: char) -> bool {
     matches!(c, '\u{300C}' | '\u{300D}')
 }
@@ -2433,7 +2423,7 @@ mod tests {
     }
 
     /// [#2239] 괄호 narrow(0.3em)는 사다리 실측 폰트(휴먼명조/한양중고딕) 한정.
-    /// 미등록 폰트의 ASCII 기호는 0.85em. 영숫자는 0.5em.
+    /// 미등록 폰트의 좁은 ASCII 기호는 0.5em, `%` 같은 넓은 기호는 0.85em.
     #[test]
     fn test_paren_narrow_is_font_conditioned() {
         let m = EmbeddedTextMeasurer;
@@ -2446,8 +2436,8 @@ mod tests {
         let positions = m.compute_char_positions("A(B", &style);
         let advance = positions[2] - positions[1];
         assert!(
-            (advance - style.font_size * 0.85).abs() < 0.5,
-            "미등록 폰트 '(' 는 0.85em 이어야 함, got {:.2}",
+            (advance - style.font_size * 0.5).abs() < 0.5,
+            "미등록 폰트 '(' 는 0.5em 이어야 함, got {:.2}",
             advance
         );
         let positions_pct = m.compute_char_positions("A%B", &style);

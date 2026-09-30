@@ -1998,6 +1998,7 @@ fn test_tac_leading_width_block_table_full_line() {
         footnote_positions: Vec::new(),
         tab_extended: Vec::new(),
         horizontal_shaping: None,
+        fit_ratio: 1.0,
     };
     let styles = ResolvedStyleSet {
         hwp3_variant: false,
@@ -2094,6 +2095,7 @@ fn test_tac_leading_width_inline_table_partial() {
         footnote_positions: Vec::new(),
         tab_extended: Vec::new(),
         horizontal_shaping: None,
+        fit_ratio: 1.0,
     };
     let styles = ResolvedStyleSet {
         hwp3_variant: false,
