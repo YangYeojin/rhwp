@@ -9,6 +9,7 @@
 |------|------|---------|------|
 | `NotoSansKR-Regular.ttf` | Noto Sans KR Regular (wght 400, 한글+라틴+글머리/도형 subset) | SIL OFL 1.1 (`NotoSansKR-OFL.txt`) | Task #2190 — CanvasKit 기본 typeface의 KS 기호/Box Drawing coverage |
 | `NotoSansKR-ExtraLight.ttf` | Noto Sans KR ExtraLight (wght 200, 한글+라틴 서브셋) | SIL OFL 1.1 (`NotoSansKR-OFL.txt`) | Task #1224 — 한컴 돋움(Haansoft Dotum)·돋움·굴림 계열의 **획 두께 정합** 대체 |
+| `NotoSerifKR-Regular.ttf` | Noto Serif KR Regular (wght 400, 한글+라틴+글머리/도형 subset) | SIL OFL 1.1 (`NotoSerifKR-OFL.txt`) | 명조 계열 최후 폴백 |
 | `SourceHanSerifK-OldHangul-subset.otf` | Source Han Serif K Old Hangul subset | SIL OFL 1.1 (`../../assets/fonts/SourceHanSerifK-OFL.txt`) | Task #4969 — exact-source old Hangul·vertical shaping fixture |
 
 ### Source Han Old Hangul SFNT 재현

@@ -8009,6 +8009,17 @@ impl LayoutEngine {
                 self.add_footnote_superscripts(tree, &mut cell_node, para, styles);
             }
 
+            if matches!(
+                table.page_break,
+                TablePageBreak::CellBreak | TablePageBreak::RowBreak
+            ) {
+                super::table_partial::settle_cellbreak_continuation_text(
+                    &mut cell_node,
+                    pad_top,
+                    pad_bottom,
+                );
+            }
+
             // (b) 셀 테두리를 수집한다. 열별 높이가 다른 표는 row_y 격자로
             // 테두리를 그릴 수 없으므로 셀 bbox 기준 라인을 별도로 생성한다.
             if let Some(bs) = border_style {

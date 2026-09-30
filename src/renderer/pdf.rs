@@ -518,27 +518,25 @@ fn create_fontdb(options: &PdfExportOptions) -> usvg::fontdb::Database {
     // 종전의 ttfs/hwp·ttfs/windows(로컬 전용)와 /mnt/c/Windows/Fonts(WSL2 전용)는
     // 제거했다 — 서버·컨테이너에서 무의미하고 /mnt/c 는 #2268 간헐 행의 원인이었다.
     crate::renderer::font_paths::load_into_fontdb(&mut fontdb, &options.font_paths);
-    fontdb.set_serif_family(options.fallback_serif.as_str());
-    fontdb.set_sans_serif_family(options.fallback_sans.as_str());
-    fontdb.set_monospace_family(options.fallback_mono.as_str());
-    warn_missing_family(
+    let serif = prefer_existing_family(
         &fontdb,
-        "serif",
         &options.fallback_serif,
-        "--fallback-serif",
+        &["Noto Serif KR", "Noto Sans KR"],
     );
-    warn_missing_family(
-        &fontdb,
-        "sans-serif",
-        &options.fallback_sans,
-        "--fallback-sans",
-    );
-    warn_missing_family(
-        &fontdb,
-        "monospace",
-        &options.fallback_mono,
-        "--fallback-mono",
-    );
+    let sans = prefer_existing_family(&fontdb, &options.fallback_sans, &["Noto Sans KR"]);
+    let mono = prefer_existing_family(&fontdb, &options.fallback_mono, &["Noto Sans KR"]);
+    fontdb.set_serif_family(&serif);
+    fontdb.set_sans_serif_family(&sans);
+    fontdb.set_monospace_family(&mono);
+    if serif == options.fallback_serif {
+        warn_missing_family(&fontdb, "serif", &serif, "--fallback-serif");
+    }
+    if sans == options.fallback_sans {
+        warn_missing_family(&fontdb, "sans-serif", &sans, "--fallback-sans");
+    }
+    if mono == options.fallback_mono {
+        warn_missing_family(&fontdb, "monospace", &mono, "--fallback-mono");
+    }
     if let Some(equation_font) = options.equation_font.as_deref() {
         let family = first_font_family(equation_font);
         if !family.is_empty() {
@@ -546,6 +544,27 @@ fn create_fontdb(options: &PdfExportOptions) -> usvg::fontdb::Database {
         }
     }
     fontdb
+}
+
+/// 요청 family가 없으면 `alternates` 중 로드된 첫 family를 쓴다.
+#[cfg(not(target_arch = "wasm32"))]
+fn prefer_existing_family(
+    fontdb: &usvg::fontdb::Database,
+    requested: &str,
+    alternates: &[&str],
+) -> String {
+    if font_family_exists(fontdb, requested) {
+        return requested.to_string();
+    }
+    for alternate in alternates {
+        if font_family_exists(fontdb, alternate) {
+            eprintln!(
+                "WARN: fallback font '{requested}' not found. '{alternate}' 으로 대체합니다."
+            );
+            return (*alternate).to_string();
+        }
+    }
+    requested.to_string()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

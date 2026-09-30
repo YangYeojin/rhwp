@@ -111,6 +111,69 @@ fn cell_content_bottom(cell_y: f64, cell_h: f64, pad_bottom: f64) -> f64 {
     cell_y + cell_h - pad_bottom
 }
 
+/// 글자가 칸 테두리 위로 나갔으면 칸 안으로 내린다. 중첩 표는 그대로 둔다.
+pub(crate) fn settle_cellbreak_continuation_text(
+    cell: &mut RenderNode,
+    pad_top: f64,
+    pad_bottom: f64,
+) {
+    let mut top = f64::INFINITY;
+    let mut bottom = f64::NEG_INFINITY;
+    text_line_vertical_extent(cell, &mut top, &mut bottom);
+    if !top.is_finite() || top + 2.0 >= cell.bbox.y {
+        return;
+    }
+    let pad_top = pad_top.max(0.0);
+    let pad_bottom = pad_bottom.max(0.0);
+    let inner_bottom = cell.bbox.y + cell.bbox.height - pad_bottom;
+    let mut delta = cell.bbox.y + pad_top - top;
+    let room = inner_bottom - bottom;
+    if room < delta {
+        delta = room.max(0.0);
+    }
+    if delta <= 0.5 {
+        return;
+    }
+    shift_text_lines_y(cell, delta);
+}
+
+fn text_line_vertical_extent(node: &RenderNode, top: &mut f64, bottom: &mut f64) {
+    if matches!(node.node_type, RenderNodeType::Table(_)) {
+        return;
+    }
+    if matches!(node.node_type, RenderNodeType::TextLine(_)) {
+        *top = top.min(node.bbox.y);
+        *bottom = bottom.max(node.bbox.y + node.bbox.height);
+    }
+    for child in &node.children {
+        text_line_vertical_extent(child, top, bottom);
+    }
+}
+
+fn shift_text_lines_y(node: &mut RenderNode, delta_y: f64) {
+    if matches!(node.node_type, RenderNodeType::Table(_)) {
+        return;
+    }
+    if matches!(node.node_type, RenderNodeType::TextLine(_)) {
+        translate_text_subtree_y(node, delta_y);
+        return;
+    }
+    for child in &mut node.children {
+        shift_text_lines_y(child, delta_y);
+    }
+}
+
+fn translate_text_subtree_y(node: &mut RenderNode, delta_y: f64) {
+    node.bbox.y += delta_y;
+    if let RenderNodeType::Line(line) = &mut node.node_type {
+        line.y1 += delta_y;
+        line.y2 += delta_y;
+    }
+    for child in &mut node.children {
+        translate_text_subtree_y(child, delta_y);
+    }
+}
+
 /// [#4159] 종료 분할 셀의 clip이 재귀 중첩 표 전체 stroke를 포섭하도록 확장한다.
 ///
 /// 재귀 표는 셀의 `inner_y`(top padding 뒤)에서 시작하지만 바깥 셀과 같은 fragment
@@ -2961,6 +3024,17 @@ impl LayoutEngine {
                 }
             }
 
+            if probe.is_none()
+                && is_continuation
+                && matches!(
+                    table.page_break,
+                    crate::model::table::TablePageBreak::CellBreak
+                        | crate::model::table::TablePageBreak::RowBreak
+                )
+            {
+                settle_cellbreak_continuation_text(&mut cell_node, pad_top, pad_bottom);
+            }
+
             table_node.children.push(cell_node);
         }
     }
@@ -4097,11 +4171,12 @@ mod tests {
     use super::{
         cell_content_bottom, expand_cell_clip_to_new_source_bounded_children,
         expand_terminal_cell_clip_to_nested_table_descendants, fragment_vpos_origin,
+        settle_cellbreak_continuation_text,
     };
     use crate::model::paragraph::{LineSeg, Paragraph};
     use crate::model::table::Cell;
     use crate::renderer::render_tree::{
-        BoundingBox, LineNode, RenderNode, RenderNodeType, TableCellNode, TableNode,
+        BoundingBox, LineNode, RenderNode, RenderNodeType, TableCellNode, TableNode, TextLineNode,
     };
 
     fn paragraph_with_vpos(vposes: &[i32]) -> Paragraph {
@@ -4211,5 +4286,62 @@ mod tests {
         expand_cell_clip_to_new_source_bounded_children(&mut cell, first_new_child);
 
         assert_eq!(cell.bbox.height, 83.0);
+    }
+
+    fn text_line(id: u32, y: f64) -> RenderNode {
+        RenderNode::new(
+            id,
+            RenderNodeType::TextLine(TextLineNode::new(20.0, 16.0)),
+            BoundingBox::new(10.0, y, 40.0, 20.0),
+        )
+    }
+
+    #[test]
+    fn cellbreak_continuation_pulls_text_that_sits_above_the_border() {
+        let mut cell = RenderNode::new(
+            1,
+            RenderNodeType::TableCell(TableCellNode {
+                col: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                border_fill_id: 0,
+                text_direction: 0,
+                clip: true,
+                page_fragment: true,
+                model_cell_index: Some(0),
+            }),
+            BoundingBox::new(0.0, 100.0, 50.0, 40.0),
+        );
+        cell.children.push(text_line(2, 78.0));
+        settle_cellbreak_continuation_text(&mut cell, 4.0, 4.0);
+        assert!(
+            (cell.children[0].bbox.y - 104.0).abs() < 0.01,
+            "글자 상단이 칸 안쪽 여백으로 내려와야 한다: {}",
+            cell.children[0].bbox.y
+        );
+        assert_eq!(cell.bbox.y, 100.0);
+    }
+
+    #[test]
+    fn cellbreak_continuation_leaves_text_already_inside_the_cell() {
+        let mut cell = RenderNode::new(
+            1,
+            RenderNodeType::TableCell(TableCellNode {
+                col: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                border_fill_id: 0,
+                text_direction: 0,
+                clip: true,
+                page_fragment: true,
+                model_cell_index: Some(0),
+            }),
+            BoundingBox::new(0.0, 100.0, 50.0, 40.0),
+        );
+        cell.children.push(text_line(2, 106.0));
+        settle_cellbreak_continuation_text(&mut cell, 4.0, 4.0);
+        assert!((cell.children[0].bbox.y - 106.0).abs() < 0.01);
     }
 }
