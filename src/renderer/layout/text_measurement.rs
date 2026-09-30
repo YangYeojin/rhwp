@@ -1401,10 +1401,14 @@ pub(crate) fn is_cjk_char(c: char) -> bool {
     || ('\u{FF00}'..='\u{FFEF}').contains(&c) // 전각 문자
 }
 
-/// 메트릭 DB에 없는 폰트에서 0.85em으로 둘 ASCII 기호.
+/// 메트릭 DB에 없는 폰트에서 0.85em으로 둘 기호.
+/// ASCII 기호와, 문자가 아닌 Latin-1 기호를 같은 폭으로 둔다.
 /// 괄호·따옴표·슬래시·`^`·`!`·`?`·`-` 처럼 좁은 기호는 제외한다.
 fn is_ascii_symbol(c: char) -> bool {
-    c.is_ascii_graphic() && !c.is_ascii_alphanumeric() && !is_narrow_ascii_symbol(c)
+    !is_narrow_ascii_symbol(c)
+        && !c.is_alphanumeric()
+        && !c.is_whitespace()
+        && (c.is_ascii_graphic() || ('\u{00A0}'..='\u{00FF}').contains(&c))
 }
 
 fn is_narrow_ascii_symbol(c: char) -> bool {
@@ -2446,6 +2450,13 @@ mod tests {
             (pct_advance - style.font_size * 0.85).abs() < 0.5,
             "미등록 폰트 '%' 는 0.85em 이어야 함, got {:.2}",
             pct_advance
+        );
+        let positions_section = m.compute_char_positions("A§B", &style);
+        let section_advance = positions_section[2] - positions_section[1];
+        assert!(
+            (section_advance - style.font_size * 0.85).abs() < 0.5,
+            "미등록 폰트의 Latin-1 기호는 0.85em 이어야 함, got {:.2}",
+            section_advance
         );
         // 한양중고딕(사다리 실측 '(' <= 0.29em): narrow 0.3em.
         let style_hy = TextStyle {
