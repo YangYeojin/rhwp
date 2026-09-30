@@ -1197,6 +1197,13 @@ pub(crate) fn char_width_decision<'a>(
                 embedded.metric,
                 embedded.character_match,
             )
+        } else if is_ascii_symbol(c) {
+            (
+                font_size * 0.85,
+                "heuristicAsciiSymbol",
+                embedded.metric,
+                embedded.character_match,
+            )
         } else {
             (
                 font_size * 0.5,
@@ -1392,6 +1399,11 @@ pub(crate) fn is_cjk_char(c: char) -> bool {
     || ('\u{F900}'..='\u{FAFF}').contains(&c) // CJK Compatibility
     || ('\u{3040}'..='\u{30FF}').contains(&c) // 히라가나/카타카나
     || ('\u{FF00}'..='\u{FFEF}').contains(&c) // 전각 문자
+}
+
+/// 메트릭 DB에 없는 폰트의 ASCII 기호. 영숫자·공백은 제외한다.
+fn is_ascii_symbol(c: char) -> bool {
+    c.is_ascii_graphic() && !c.is_ascii_alphanumeric()
 }
 
 /// 실제 글리프 폭이 반각(em/2)보다 뚜렷이 좁은 구두점·기호.
@@ -2421,12 +2433,10 @@ mod tests {
     }
 
     /// [#2239] 괄호 narrow(0.3em)는 사다리 실측 폰트(휴먼명조/한양중고딕) 한정.
-    /// 미실측(미등록) 폰트의 괄호는 0.5em 폴백 유지 — HY신명조·바탕 계열
-    /// 0.5em(#2156 ASCII 폭 표) 회귀 방지.
+    /// 미등록 폰트의 ASCII 기호는 0.85em. 영숫자는 0.5em.
     #[test]
     fn test_paren_narrow_is_font_conditioned() {
         let m = EmbeddedTextMeasurer;
-        // 미등록·미실측 폰트: 괄호는 0.5em 폴백.
         let style = TextStyle {
             font_family: UNREGISTERED_FONT.to_string(),
             font_size: 13.333,
@@ -2436,9 +2446,16 @@ mod tests {
         let positions = m.compute_char_positions("A(B", &style);
         let advance = positions[2] - positions[1];
         assert!(
-            (advance - style.font_size * 0.5).abs() < 0.5,
-            "미실측 폰트 '(' 는 0.5em 폴백이어야 함, got {:.2}",
+            (advance - style.font_size * 0.85).abs() < 0.5,
+            "미등록 폰트 '(' 는 0.85em 이어야 함, got {:.2}",
             advance
+        );
+        let positions_pct = m.compute_char_positions("A%B", &style);
+        let pct_advance = positions_pct[2] - positions_pct[1];
+        assert!(
+            (pct_advance - style.font_size * 0.85).abs() < 0.5,
+            "미등록 폰트 '%' 는 0.85em 이어야 함, got {:.2}",
+            pct_advance
         );
         // 한양중고딕(사다리 실측 '(' <= 0.29em): narrow 0.3em.
         let style_hy = TextStyle {
