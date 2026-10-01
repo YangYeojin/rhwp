@@ -3089,11 +3089,13 @@ impl Renderer for SvgRenderer {
                     ));
                     continue;
                 }
-                let char_x = x + char_positions[*char_idx] + dx;
+                let advance = cluster_advance(*char_idx, cluster_str);
+                let (char_x, center_anchor) =
+                    svg_symbol_draw_x(cluster_str, x + char_positions[*char_idx] + dx, advance);
                 let char_y = y + dy;
                 let length_attrs = svg_cluster_text_length_attrs(
                     cluster_str,
-                    cluster_advance(*char_idx, cluster_str),
+                    advance,
                     style,
                     script_advance_scale,
                     ratio,
@@ -3101,19 +3103,21 @@ impl Renderer for SvgRenderer {
                 let shadow_attrs = attrs_for_cluster(cluster_str, &shadow_color);
                 if has_ratio {
                     self.output.push_str(&format!(
-                        "<text transform=\"translate({},{}) scale({:.4},1)\" {}{}>{}</text>\n",
+                        "<text transform=\"translate({},{}) scale({:.4},1)\" {}{}{}>{}</text>\n",
                         char_x,
                         char_y,
                         ratio,
+                        center_anchor,
                         shadow_attrs,
                         length_attrs,
                         escape_xml(cluster_str),
                     ));
                 } else {
                     self.output.push_str(&format!(
-                        "<text x=\"{}\" y=\"{}\" {}{}>{}</text>\n",
+                        "<text x=\"{}\" y=\"{}\" {}{}{}>{}</text>\n",
                         char_x,
                         char_y,
+                        center_anchor,
                         shadow_attrs,
                         length_attrs,
                         escape_xml(cluster_str),
@@ -3170,10 +3174,12 @@ impl Renderer for SvgRenderer {
                 ));
                 continue;
             }
-            let char_x = x + char_positions[*char_idx];
+            let advance = cluster_advance(*char_idx, cluster_str);
+            let (char_x, center_anchor) =
+                svg_symbol_draw_x(cluster_str, x + char_positions[*char_idx], advance);
             let length_attrs = svg_cluster_text_length_attrs(
                 cluster_str,
-                cluster_advance(*char_idx, cluster_str),
+                advance,
                 style,
                 script_advance_scale,
                 ratio,
@@ -3182,19 +3188,21 @@ impl Renderer for SvgRenderer {
 
             if has_ratio {
                 self.output.push_str(&format!(
-                    "<text transform=\"translate({},{}) scale({:.4},1)\" {}{}>{}</text>\n",
+                    "<text transform=\"translate({},{}) scale({:.4},1)\" {}{}{}>{}</text>\n",
                     char_x,
                     y,
                     ratio,
+                    center_anchor,
                     common_attrs,
                     length_attrs,
                     escape_xml(cluster_str),
                 ));
             } else {
                 self.output.push_str(&format!(
-                    "<text x=\"{}\" y=\"{}\" {}{}>{}</text>\n",
+                    "<text x=\"{}\" y=\"{}\" {}{}{}>{}</text>\n",
                     char_x,
                     y,
+                    center_anchor,
                     common_attrs,
                     length_attrs,
                     escape_xml(cluster_str),
@@ -3614,6 +3622,18 @@ fn svg_cluster_text_length_attrs(
         return String::new();
     };
     svg_text_length_attrs(cluster_str, glyph_advance * script_advance_scale, scale_x)
+}
+
+/// 기호는 레이아웃 칸 가운데에 그린다. PDF(SVG) 경로용.
+fn svg_symbol_draw_x(cluster: &str, pen_x: f64, advance: f64) -> (f64, &'static str) {
+    let mut chars = cluster.chars();
+    let Some(ch) = chars.next() else {
+        return (pen_x, "");
+    };
+    if chars.next().is_some() || ch.is_alphanumeric() || ch.is_whitespace() || advance <= 0.0 {
+        return (pen_x, "");
+    }
+    (pen_x + advance * 0.5, " text-anchor=\"middle\" ")
 }
 
 /// XML 특수문자 이스케이프
