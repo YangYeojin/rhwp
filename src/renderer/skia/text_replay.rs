@@ -29,6 +29,33 @@ pub(super) struct SkiaTextReplay<'a> {
     pub(super) output_options: &'a LayerOutputOptions,
 }
 
+/// 기호 잉크를 레이아웃 칸 가운데로 옮기는 x 보정.
+/// 글자·숫자는 펜 원점을 유지한다.
+fn symbol_ink_center_shift(
+    font: &Font,
+    cluster: &str,
+    paint: &Paint,
+    layout_advance: f32,
+    ratio: f32,
+) -> f32 {
+    let mut chars = cluster.chars();
+    let Some(ch) = chars.next() else {
+        return 0.0;
+    };
+    if chars.next().is_some() || ch.is_alphanumeric() || ch.is_whitespace() || layout_advance <= 0.0
+    {
+        return 0.0;
+    }
+    let (_, bounds) = font.measure_str(cluster, Some(paint));
+    let scale = if ratio > 0.0 { ratio } else { 1.0 };
+    let ink_w = bounds.width() * scale;
+    if ink_w < 0.5 {
+        return 0.0;
+    }
+    let shift = (layout_advance - ink_w) / 2.0 - bounds.left() * scale;
+    if shift.abs() < 0.4 { 0.0 } else { shift }
+}
+
 impl SkiaTextReplay<'_> {
     pub(super) fn draw_text(
         &self,
@@ -478,10 +505,21 @@ impl SkiaTextReplay<'_> {
                             }
                         }
                         if let Some(font) = font_for_text(cluster, font_size) {
-                            let char_x = bbox.x as f32
+                            let layout_advance = cluster_advance(*char_idx, cluster);
+                            let mut char_x = bbox.x as f32
                                 + char_positions.get(*char_idx).copied().unwrap_or(0.0) as f32
                                 + dx;
                             let char_y = y as f32 + dy;
+                            // 레이아웃 칸은 넓히지만 draw_str 은 폰트 펜 원점(칸의 왼쪽)에
+                            // 그린다. § 처럼 왼쪽 사이드베어링이 큰 기호는 잉크가 칸
+                            // 오른쪽에 붙어 다음 글자와 겹친다. 기호만 칸 가운데로 옮긴다.
+                            char_x += symbol_ink_center_shift(
+                                &font,
+                                cluster,
+                                &text_paint,
+                                layout_advance,
+                                if has_ratio { ratio } else { 1.0 },
+                            );
                             // 반각 강제 구두점: 측정은 반각(0.3~0.5em)인데 폰트
                             // 글리프가 전각인 문자(휴먼명조 U+2018 등)를 그대로
                             // 그리면 다음 글자와 겹친다. web_canvas 와 동일하게
